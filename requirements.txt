@@ -1,0 +1,4 @@
+fastapi
+uvicorn[standard]
+requests
+pyquotex @ git+https://github.com/cleitonleonel/pyquotex.git
