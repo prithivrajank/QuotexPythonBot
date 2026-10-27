@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: quotex-otc-signal-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: DASHBOARD_USERNAME
+        sync: false
+      - key: DASHBOARD_PASSWORD
+        sync: false
+      - key: ENABLE_COLLECTOR
+        value: "false"
+      - key: OTC_PAIRS
+        value: EURUSD_otc,USDIDR_otc,USDJPY_otc,AUDCHF_otc
+      - key: POLL_SECONDS
+        value: "60"
