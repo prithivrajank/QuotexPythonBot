@@ -335,7 +335,20 @@ async def collector():
 async def lifespan(app):
     stop_event.clear()
     task = None
-    enabled = os.getenv("ENABLE_COLLECTOR", "false").strip().lower() in {"1", "true", "yes"}
+    true_values = {"1", "true", "yes", "on"}
+    collector_requested = os.getenv("ENABLE_COLLECTOR", "false").strip().lower() in true_values
+    disable_collector = os.getenv("DISABLE_COLLECTOR", "false").strip().lower() in true_values
+    credentials_present = bool(
+        os.getenv("QUOTEX_EMAIL", "").strip()
+        and os.getenv("QUOTEX_PASSWORD", "").strip()
+    )
+
+    # A configured Quotex email/password pair is also treated as an explicit
+    # opt-in. This helps when a manually-created Render service still has a
+    # stale ENABLE_COLLECTOR=false value that was not synced from render.yaml.
+    # DISABLE_COLLECTOR=true always takes precedence as the emergency off switch.
+    enabled = not disable_collector and (collector_requested or credentials_present)
+
     if enabled:
         task = asyncio.create_task(collector())
     else:
