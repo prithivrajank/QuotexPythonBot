@@ -19,6 +19,23 @@ try:
 except ImportError:
     Quotex = None
 
+# Compatibility patch: pyquotex's login module reads Response.reason_phrase,
+# while curl_cffi Response exposes the same value as Response.reason.
+# Add a safe alias so the original HTTP failure can be reported instead of
+# masking it with AttributeError.
+try:
+    from curl_cffi.requests import Response as CurlResponse
+
+    if not hasattr(CurlResponse, "reason_phrase"):
+        CurlResponse.reason_phrase = property(
+            lambda response: (
+                getattr(response, "reason", None)
+                or f"HTTP {getattr(response, 'status_code', 'unknown')}"
+            )
+        )
+except ImportError:
+    pass
+
 ROOT = Path(__file__).resolve().parent
 IST = ZoneInfo("Asia/Kolkata")
 PAIRS = [x.strip() for x in os.getenv(
