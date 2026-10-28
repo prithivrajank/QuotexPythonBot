@@ -14,7 +14,7 @@ services:
       - key: DASHBOARD_PASSWORD
         sync: false
       - key: ENABLE_COLLECTOR
-        value: "false"
+        value: "true"
       - key: OTC_PAIRS
         value: EURUSD_otc,USDIDR_otc,USDJPY_otc,AUDCHF_otc
       - key: POLL_SECONDS
