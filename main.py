@@ -2,6 +2,7 @@ import asyncio
 import base64
 import csv
 import html
+import logging
 import hmac
 import os
 import time
@@ -12,9 +13,9 @@ from zoneinfo import ZoneInfo
 
 import requests
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 
-logger = logging.getLogger("quotex_collector"), PlainTextResponse
+logger = logging.getLogger("quotex_collector")
 
 try:
     from pyquotex.stable_api import Quotex
