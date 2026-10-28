@@ -12,16 +12,13 @@ Before opening the dashboard, set these Environment variables in Render:
 
 Render's `/health` check is public; the dashboard and API routes require HTTP Basic Authentication. Do not reuse your Quotex password as the dashboard password.
 
-The service initially runs in **dashboard-only mode**:
-- `ENABLE_COLLECTOR=false`
-- No Quotex credentials are required for the first deployment.
-- This lets you verify the public dashboard and authentication without sending account credentials to the hosted service.
+The service can run in **dashboard-only mode** when no Quotex credentials are configured and `ENABLE_COLLECTOR` is not true. No Quotex credentials are required for the first deployment.
 
 ## Optional data collector — read this first
 
-The collector uses unofficial `pyquotex`. It can break, be blocked by anti-bot challenges, or behave inconsistently. Hosting on Render does not guarantee that the Quotex connection will succeed. Providing Quotex credentials to any cloud host carries account-security risk; leave the collector disabled unless you knowingly accept that risk and have checked Quotex's applicable terms.
+The collector uses unofficial `pyquotex`. It can break, be blocked by anti-bot challenges, or behave inconsistently. Hosting on Render does not guarantee that the Quotex connection will succeed. Providing Quotex credentials to any cloud host carries account-security risk. Use demo credentials only if you knowingly accept this risk and have checked Quotex's applicable terms.
 
-Only after deciding to enable it, set `ENABLE_COLLECTOR=true` and add `QUOTEX_EMAIL` and `QUOTEX_PASSWORD` as **private Render environment variables**, never in code or GitHub. Do not upload `session.json`, cookies, tokens, OTPs, or `.env` files. Keep the account in demo mode. This app never places trades.
+To enable the collector, set `ENABLE_COLLECTOR=true` **or** configure both `QUOTEX_EMAIL` and `QUOTEX_PASSWORD` as private Render environment variables. Configured credentials are treated as an opt-in even if an older service has a stale `ENABLE_COLLECTOR=false` setting. To force the collector off, set `DISABLE_COLLECTOR=true`. Never put credentials in code or GitHub. Do not upload `session.json`, cookies, tokens, OTPs, or `.env` files. Keep the account in demo mode. This app never places trades.
 
 Optional variables:
 - `OTC_PAIRS`: defaults to `EURUSD_otc,USDIDR_otc,USDJPY_otc,AUDCHF_otc`
