@@ -12,7 +12,9 @@ from zoneinfo import ZoneInfo
 
 import requests
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse
+
+logger = logging.getLogger("quotex_collector"), PlainTextResponse
 
 try:
     from pyquotex.stable_api import Quotex
