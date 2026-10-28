@@ -234,7 +234,7 @@ async def collector():
         return
 
     client = Quotex(email=email, password=password, lang="en",
-                    host=os.getenv("QUOTEX_HOST", "quotex.com"))
+                    host=os.getenv("QUOTEX_HOST", "qxbroker.com"))
     client.account_is_demo = 1
     try:
         state["status"] = "Connecting to demo account"
