@@ -1,4 +1,4 @@
-fastapi
-uvicorn[standard]
-requests
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+requests>=2.32,<3.0
 pyquotex @ git+https://github.com/cleitonleonel/pyquotex.git
