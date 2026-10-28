@@ -238,10 +238,30 @@ async def collector():
     client.account_is_demo = 1
     try:
         state["status"] = "Connecting to demo account"
-        ok, detail = await client.connect()
-        if not ok:
+        try:
+            result = await client.connect()
+        except Exception as exc:
+            # Log the exception type and message so Render logs show the real
+            # failure, rather than only the dashboard's generic login message.
+            logger.exception("Quotex connect() raised %s", type(exc).__name__)
             state["status"] = "Connection failed"
-            state["last_error"] = str(detail)
+            state["last_error"] = f"{type(exc).__name__}: {str(exc)[:300]}"
+            return
+
+        if not isinstance(result, (tuple, list)) or len(result) < 2:
+            logger.error("Unexpected pyquotex connect() result type: %s", type(result).__name__)
+            state["status"] = "Connection failed"
+            state["last_error"] = f"Unexpected connect() result: {type(result).__name__}"
+            return
+
+        ok, detail = result[0], result[1]
+        if not ok:
+            # Avoid logging credentials/session data. Keep the returned reason
+            # short so the dashboard can display useful diagnostic information.
+            safe_detail = str(detail)[:300]
+            logger.error("Quotex connect() returned not-ok; detail=%s", safe_detail)
+            state["status"] = "Connection failed"
+            state["last_error"] = safe_detail or "pyquotex returned no error detail"
             return
         state["connected"] = True
 
