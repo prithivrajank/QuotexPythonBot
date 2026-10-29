@@ -218,8 +218,8 @@ def connection_status() -> dict[str, Any]:
             return {"connected": False, "live_data": False, "credentials_configured": False,
                     "message": "OTCHARTS_API_KEY is missing. Add it in Render Environment.", "source": data_source_label()}
         return {"connected": True, "live_data": False, "credentials_configured": True,
-                "message": "OTCharts API key is configured. Use Refresh selected pair to verify candle access; the free key has limited requests and no live streaming.",
-                "source": data_source_label(), "market_type": "Quotex OTC", "affiliation": "Third-party provider; not operated by Quotex."}
+                "message": "OTCharts key is configured but not yet validated. Use Refresh selected pair to test access. Free tier: 200 requests in the first month, five instruments, no live streaming; automatic polling is disabled to preserve quota.",
+                "source": data_source_label(), "market_type": "Quotex OTC", "manual_refresh_only": True, "affiliation": "Third-party provider; not operated by Quotex."}
     if _provider() == "quantex":
         if not os.getenv("QUANTEX_API_KEY", "").strip():
             return {"connected": False, "live_data": False, "credentials_configured": False,
