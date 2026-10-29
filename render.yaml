@@ -9,7 +9,7 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.11
-      - key: OTCHARTS_API_KEY
+      - key: TWELVE_DATA_API_KEY
         sync: false
       - key: QUOTEX_DEMO
         value: "true"
