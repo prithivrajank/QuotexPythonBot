@@ -1,6 +1,32 @@
-# Multi-Pair Standard Forex Chart, Signals & History
+# Multi-Pair Forex / Quotex Market-Data Analyzer
 
-Read-only dashboard for Twelve Data standard forex OHLC. This project is not affiliated with Quotex and does not fetch Quotex OTC prices or place trades.
+Read-only chart and signal dashboard. The data provider is selected with `MARKET_DATA_PROVIDER`. Twelve Data supplies standard forex candles; QUANTEX is a third-party service that documents Quotex live/OTC pair candles. QUANTEX is not operated by Quotex. This project does not place trades.
+
+## Providers
+
+- `MARKET_DATA_PROVIDER=twelve_data` (default): use `TWELVE_DATA_API_KEY` and standard forex symbols such as `EUR/USD`.
+- `MARKET_DATA_PROVIDER=quantex`: use `QUANTEX_API_KEY`, `QUANTEX_BROKER=quotex`, and QUANTEX symbols such as `EURUSD_otc` for OTC or `EURUSD` for a live pair. Set `FOREX_SYMBOLS` to the exact symbols returned by QUANTEX `/v1/pairs`.
+
+QUANTEX docs: https://quantexbot.pro/docs/api and https://quantexbot.pro/docs/api/candles. The candle endpoint requires the `candles:read` permission and a plan that includes candle data. To list pairs, the key also needs the appropriate pair/market read permission. Confirm plan access in your QUANTEX account before deploying.
+
+## Secure setup on Render for QUANTEX
+
+1. Open Render Dashboard → your `quotex-live-signal-bot` service → **Environment**.
+2. Add `MARKET_DATA_PROVIDER` = `quantex`.
+3. Add `QUANTEX_API_KEY` = your secret API key. Never put the key in GitHub, frontend JavaScript, a URL, a screenshot, or this chat.
+4. Add `QUANTEX_BROKER` = `quotex`.
+5. Change `FOREX_SYMBOLS` to a comma-separated list of symbols returned by QUANTEX. Example only: `EURUSD_otc,GBPUSD_otc,EURUSD,GBPUSD`. Verify exact pair symbols from the API pair catalogue and your plan.
+6. Save and deploy. Check `/api/status`, then `/api/assets`, then the dashboard. A 401 means the key is invalid; 403 usually means permission/plan access is missing; 429 means a limit was reached.
+
+Render docs for environment variables: https://render.com/docs/configure-environment-variables. Use the Render Environment UI; do not commit secret values to `render.yaml`.
+
+## Important behavior and limitations
+
+- The adapter currently retrieves OHLC candles by REST request. It does not yet consume QUANTEX's live tick stream; chart updates depend on the refresh schedule and provider candle availability.
+- QUANTEX is a third-party data provider, not an official Quotex service. Compare sample candles against the Quotex screen before relying on signals; exact matching is not guaranteed.
+- Signal labels and expiry suggestions are heuristic, not a validated win probability or guarantee.
+- Keep the dashboard bot OFF when not testing to reduce API usage. Manual refresh still makes a provider request.
+
 
 ## Features
 
@@ -57,7 +83,11 @@ Alerts contain the symbol, CALL/PUT/WAIT heuristic, RSI, MACD histogram, and sup
 
 ## Environment variables
 
-- `TWELVE_DATA_API_KEY` — required.
+- `MARKET_DATA_PROVIDER` — `twelve_data` (default) or `quantex`.
+- `TWELVE_DATA_API_KEY` — required when `MARKET_DATA_PROVIDER=twelve_data`.
+- `QUANTEX_API_KEY` — required when `MARKET_DATA_PROVIDER=quantex`; keep it only in Render Environment.
+- `QUANTEX_BROKER` — defaults to `quotex`.
+- `FOREX_SYMBOLS` — comma-separated symbols; use provider-specific format.
 - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — optional, both needed for alerts.
 - `FOREX_SYMBOLS` — comma-separated watchlist; defaults to 10 major/minor pairs in `render.yaml`.
 - `REFRESH_INTERVAL_SECONDS` — defaults to 300 and cannot be set below 300.
