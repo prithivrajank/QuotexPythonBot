@@ -15,6 +15,64 @@ import requests
 
 BASE_URL = "https://api.twelvedata.com"
 SOURCE = "Twelve Data standard forex (independent provider; not Quotex OTC)"
+
+QUANTEX_BASE_URL = "https://api.quantexbot.pro/v1"
+
+def _provider() -> str:
+    return os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower()
+
+def data_source_label() -> str:
+    return "QUANTEX third-party Quotex market-data API (not operated by Quotex)" if _provider() == "quantex" else SOURCE
+
+def _qx_request(path: str, params: dict[str, Any]) -> dict[str, Any]:
+    key = os.getenv("QUANTEX_API_KEY", "").strip()
+    if not key:
+        raise MarketDataError("QUANTEX_API_KEY is missing. Add it in Render Environment.")
+    try:
+        response = requests.get(f"{QUANTEX_BASE_URL}/{path}", params=params,
+            headers={"Authorization": f"Bearer {key}"}, timeout=15)
+    except requests.RequestException as exc:
+        raise MarketDataError(f"Could not reach QUANTEX API: {type(exc).__name__}.") from None
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    if response.status_code == 401:
+        raise MarketDataError("QUANTEX rejected the API key (HTTP 401). Check QUANTEX_API_KEY.")
+    if response.status_code == 429:
+        raise MarketDataError("QUANTEX rate/quota limit reached (HTTP 429). Check your plan usage.")
+    if not response.ok or not isinstance(body, dict) or not body.get("ok"):
+        err = body.get("error", {}) if isinstance(body, dict) else {}
+        raise MarketDataError(f"QUANTEX API error {err.get('code', response.status_code)}: {str(err.get('message', 'Unexpected response'))[:180]}")
+    return body
+
+def _qx_candles(asset: str, timeframe_seconds: int, limit: int) -> list[dict[str, Any]]:
+    tf = {60: "M1", 300: "M5", 900: "M15", 1800: "M30", 3600: "H1", 14400: "H4"}.get(timeframe_seconds)
+    if not tf:
+        raise ValueError("QUANTEX supports M1, M5, M15, M30, H1 and H4.")
+    symbol = asset.strip()
+    if symbol.lower().endswith("_otc"):
+        symbol = symbol[:-4] + "_otc"
+    else:
+        symbol = symbol.replace("/", "").replace("-", "").upper()
+    body = _qx_request("candles", {"broker": os.getenv("QUANTEX_BROKER", "quotex"), "pair": symbol, "tf": tf, "limit": min(limit, 1000)})
+    rows = body.get("data", {}).get("candles", [])
+    if not isinstance(rows, list):
+        raise MarketDataError("QUANTEX response did not contain a candles list.")
+    result = []
+    for i, row in enumerate(rows):
+        try:
+            timestamp = int(row.get("epoch") or datetime.fromisoformat(str(row["time"]).replace("Z", "+00:00")).timestamp())
+            vals = {k: float(row[k]) for k in ("open", "high", "low", "close")}
+        except (KeyError, TypeError, ValueError, OverflowError):
+            raise MarketDataError(f"QUANTEX candle #{i + 1} has invalid fields.") from None
+        if timestamp < 0 or any(not math.isfinite(v) for v in vals.values()):
+            raise MarketDataError(f"QUANTEX candle #{i + 1} contains invalid values.")
+        result.append({"time": timestamp, **vals, "symbol": symbol, "timeframe_seconds": timeframe_seconds,
+            "venue": "quantex", "market_type": "OTC" if symbol.lower().endswith("_otc") else "live forex", "source": data_source_label()})
+    result.sort(key=lambda item: item["time"])
+    return result[-limit:]
+
 TIMEOUT_SECONDS = 12
 TIMEFRAME_MAP = {
     60: "1min",
@@ -86,7 +144,20 @@ def _get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
 
 
 def connection_status() -> dict[str, Any]:
-    """Validate the key against Twelve Data's API usage endpoint."""
+    """Validate the selected market-data provider."""
+    if _provider() == "quantex":
+        if not os.getenv("QUANTEX_API_KEY", "").strip():
+            return {"connected": False, "live_data": False, "credentials_configured": False,
+                    "message": "QUANTEX_API_KEY is missing. Add it in Render Environment.", "source": data_source_label()}
+        try:
+            body = _qx_request("pairs", {"broker": os.getenv("QUANTEX_BROKER", "quotex"), "market": "otc", "open": "true"})
+            count = len(body.get("data", []))
+        except MarketDataError as exc:
+            return {"connected": False, "live_data": False, "credentials_configured": True, "message": str(exc), "source": data_source_label()}
+        return {"connected": True, "live_data": True, "credentials_configured": True,
+                "message": f"QUANTEX API key accepted; OTC pair catalogue returned {count} pairs.",
+                "source": data_source_label(), "market_type": "Quotex live and OTC pairs",
+                "affiliation": "Third-party provider; not operated by Quotex."}
     if not os.getenv("TWELVE_DATA_API_KEY", "").strip():
         return {
             "connected": False,
@@ -121,7 +192,19 @@ def connection_status() -> dict[str, Any]:
 
 
 def get_assets() -> list[dict[str, Any]]:
-    """Fetch the live forex-pair catalogue from Twelve Data."""
+    """Fetch the selected provider's available pair catalogue."""
+    if _provider() == "quantex":
+        result: list[dict[str, Any]] = []
+        broker = os.getenv("QUANTEX_BROKER", "quotex")
+        for market in ("live", "otc"):
+            body = _qx_request("pairs", {"broker": broker, "market": market, "open": "true"})
+            for pair in body.get("data", []):
+                if isinstance(pair, dict) and isinstance(pair.get("symbol"), str):
+                    result.append({"symbol": pair["symbol"], "name": pair.get("name", pair["symbol"]),
+                                   "market_type": market, "venue": "quantex", "source": data_source_label()})
+        if not result:
+            raise MarketDataError("QUANTEX returned no open pairs for the selected broker.")
+        return result
     payload = _get("forex_pairs")
     pairs = payload.get("data")
     if not isinstance(pairs, list):
@@ -149,6 +232,11 @@ def get_candles(
     """Fetch real standard-forex OHLC bars, oldest first; never fabricate candles."""
     if not isinstance(asset, str) or not asset.strip():
         raise ValueError("asset must not be empty")
+    if _provider() == "quantex":
+        if any(ch.isspace() for ch in asset.strip()):
+            raise ValueError("asset must be a pair symbol without spaces")
+        return _qx_candles(asset, timeframe_seconds, limit)
+
     symbol = asset.strip().upper().replace("-", "/")
     if any(ch.isspace() for ch in symbol):
         raise ValueError("asset must be a symbol such as EUR/USD without spaces")
