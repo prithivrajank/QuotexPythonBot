@@ -9,8 +9,14 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.11
+      - key: MARKET_DATA_PROVIDER
+        value: "twelve_data"
       - key: TWELVE_DATA_API_KEY
         sync: false
+      - key: QUANTEX_API_KEY
+        sync: false
+      - key: QUANTEX_BROKER
+        value: "quotex"
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_CHAT_ID
