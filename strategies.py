@@ -103,7 +103,7 @@ def build_chart_data(candles: list[dict]) -> dict:
     df = _frame(candles)
     if df.empty:
         return {"candles": [], "ema9": [], "ema21": [], "bbUpper": [], "bbMiddle": [],
-                "bbLower": [], "macd": [], "macdSignal": [], "macdHistogram": []}
+                "bbLower": [], "support20": [], "resistance20": [], "macd": [], "macdSignal": [], "macdHistogram": []}
     ind = _indicators(df)
     candle_rows = []
     for _, row in df.iterrows():
@@ -131,6 +131,8 @@ def build_chart_data(candles: list[dict]) -> dict:
                 "value": float(value),
                 "color": "#26a69a" if value >= 0 else "#ef5350",
             })
+    support = df["low"].rolling(20, min_periods=1).min()
+    resistance = df["high"].rolling(20, min_periods=1).max()
     return {
         "candles": candle_rows,
         "ema9": line(ind["ema9"]),
@@ -138,6 +140,8 @@ def build_chart_data(candles: list[dict]) -> dict:
         "bbUpper": line(ind["bb_upper"]),
         "bbMiddle": line(ind["bb_mid"]),
         "bbLower": line(ind["bb_lower"]),
+        "support20": line(support),
+        "resistance20": line(resistance),
         "macd": line(ind["macd"]),
         "macdSignal": line(ind["macd_signal"]),
         "macdHistogram": histogram,
