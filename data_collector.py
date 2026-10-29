@@ -35,12 +35,26 @@ def _api_key() -> str:
     return key
 
 
+def _provider_error_detail(response: requests.Response) -> str:
+    """Return a short provider error message without dumping arbitrary response data."""
+    try:
+        body = response.json()
+    except ValueError:
+        return ""
+    if not isinstance(body, dict):
+        return ""
+    detail = body.get("error") or body.get("message")
+    if isinstance(detail, str):
+        return detail[:240]
+    return ""
+
+
 def _get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     """Perform an authenticated HTTPS GET without logging secrets."""
     try:
         response = requests.get(
             f"{BASE_URL}/{path.lstrip('/')}",
-            headers={"Authorization": f"Bearer {_api_key()}"},
+            headers={"Authorization": f"Bearer {_api_key()}", "User-Agent": "QuotexPythonBot/0.2"},
             params=params,
             timeout=TIMEOUT_SECONDS,
         )
@@ -49,21 +63,33 @@ def _get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
             f"Could not reach the OTCharts market-data service: {type(exc).__name__}."
         ) from None
 
-    if response.status_code in (401, 403):
+    detail = _provider_error_detail(response)
+    if response.status_code == 401:
         raise MarketDataError(
-            "OTCharts rejected the API key or this plan does not allow the "
-            "requested data. Check the key and enabled venue in your OTCharts account."
+            "OTCharts returned HTTP 401: key is missing/unknown/revoked or the account email "
+            "is unconfirmed. Check the OTCharts key. " + detail
+        )
+    if response.status_code == 402:
+        raise MarketDataError(
+            "OTCharts returned HTTP 402: its documentation says this means the account has "
+            "a plan the server does not support; it is not an invalid-key error. Contact "
+            "OTCharts support with the failed endpoint and status. " + detail
+        )
+    if response.status_code == 403:
+        raise MarketDataError(
+            "OTCharts returned HTTP 403: this API key's plan may not open the Quotex venue "
+            "or requested instrument. Check GET /v1/venues and your key's selected book. " + detail
         )
     if response.status_code == 404:
         raise MarketDataError(
             "OTCharts did not find that symbol for the Quotex venue. "
-            "Use an exact symbol returned by get_assets()."
+            "Use an exact symbol returned by get_assets(). " + detail
         )
     if response.status_code == 429:
-        raise MarketDataError("OTCharts request limit reached; check your plan and usage.")
+        raise MarketDataError("OTCharts request limit reached; check your plan and usage. " + detail)
     if not response.ok:
         raise MarketDataError(
-            f"OTCharts returned HTTP {response.status_code} for the market-data request."
+            f"OTCharts returned HTTP {response.status_code} for the market-data request. " + detail
         )
     try:
         payload = response.json()
@@ -75,7 +101,7 @@ def _get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
 
 
 def connection_status() -> dict[str, Any]:
-    """Check API authentication using OTCharts' non-quota /v1/usage endpoint."""
+    """Check which venues the API key can access, using documented /v1/venues."""
     if not os.getenv("OTCHARTS_API_KEY", "").strip():
         return {
             "connected": False,
@@ -86,7 +112,18 @@ def connection_status() -> dict[str, Any]:
         }
 
     try:
-        _get("usage")
+        payload = _get("venues")
+        venues = payload.get("venues")
+        if not isinstance(venues, list):
+            raise MarketDataError("OTCharts /v1/venues response did not contain a venues list.")
+        quotex = next((v for v in venues if isinstance(v, dict) and v.get("id") == VENUE), None)
+        if quotex is None:
+            raise MarketDataError("OTCharts did not list a Quotex venue for this API key.")
+        if quotex.get("open") is not True:
+            raise MarketDataError(
+                "OTCharts API key is reachable, but the Quotex venue is not enabled for this key. "
+                "Open OTCharts Account → API keys, select Quotex, and save the selected books."
+            )
     except MarketDataError as exc:
         return {
             "connected": False,
@@ -101,8 +138,8 @@ def connection_status() -> dict[str, Any]:
         "live_data": False,
         "credentials_configured": True,
         "message": (
-            "OTCharts API authentication verified. Real candles are fetched on "
-            "demand; live_data becomes verified only after a successful candle request."
+            "OTCharts API key is accepted and the Quotex venue is enabled. "
+            "This confirms access only; real candle data is verified separately by /api/candles."
         ),
         "source": SOURCE,
         "venue": VENUE,
