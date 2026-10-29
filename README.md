@@ -9,6 +9,8 @@ Read-only dashboard for Twelve Data standard forex OHLC. This project is not aff
 - Candlestick chart with EMA(9), EMA(21), and Bollinger Bands.
 - MACD (12, 26, 9), RSI(14), and rolling 20-candle support/resistance.
 - SQLite signal history with a simple five-candle later price comparison.
+- Heuristic 1-minute vs 2-minute expiry suggestion and a signal-strength label.
+- Candle-window freshness label; updates remain dependent on scheduled REST polling, not tick-by-tick streaming.
 
 ## Important: Quotex assets versus Twelve Data
 
@@ -32,7 +34,9 @@ The scheduler makes **one candle request per refresh interval** and rotates to t
 
 At five minutes, total usage is about 288 candle requests/day if the service runs continuously, regardless of watchlist size. This leaves some of the stated 800 daily credits for status checks and manual requests, though each API endpoint may have its own credit cost and limits can change. Avoid repeated manual refreshes.
 
-The free Render service can spin down while idle; the scheduler pauses during sleep and resumes after the service wakes. This is scheduled REST polling, not a tick-by-tick stream.
+The free Render service can spin down while idle; the scheduler pauses during sleep and resumes after the service wakes. This is scheduled REST polling, not a tick-by-tick stream. The current five-minute minimum means a configured pair may only be revisited every N × 5 minutes (N = watchlist size), so it cannot guarantee an actionable signal during every 1-minute candle. True live updates require a suitable real-time feed/plan and a quota budget that supports the desired polling frequency.
+
+The expiry hint compares EMA trend, MACD histogram, and the last three candle directions. It is a simple heuristic, not a trained model, tested probability, or guarantee; use demo testing before relying on it. A 1-minute/2-minute expiry is not equivalent to a 1-minute/2-minute candle.
 
 ## Twelve Data setup
 
