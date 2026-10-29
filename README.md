@@ -85,3 +85,8 @@ SQLite history defaults to `/tmp` and **can be lost on Render free service resta
 ## Disclaimer
 
 All market data is standard forex, not Quotex OTC/synthetic pricing. OTC prices can differ. CALL/PUT/WAIT labels are unvalidated heuristics, not financial advice, and do not guarantee future outcomes.
+
+
+## Candle timeframe vs trade expiry
+
+The chart/data candle timeframe is fixed at **1 minute** (FOREX_TIMEFRAME_SECONDS=60). The signal strategy may suggest a **1-minute or 2-minute trade expiry** depending on the current indicator alignment, candle body, recent candle direction, and MACD momentum. The expiry suggestion is not the candle timeframe and is only a heuristic. If the signal is WAIT, no expiry should be used. The current REST scheduler still cannot evaluate every forming candle in real time; it refreshes on its configured interval.
