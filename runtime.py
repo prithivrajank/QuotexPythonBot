@@ -24,6 +24,19 @@ _lock = threading.Lock()
 _snapshots: dict[str, dict[str, Any]] = {}
 _next_symbol_index = 0
 _last_alerted_signal: dict[str, str] = {}
+_bot_enabled = False
+
+
+def bot_status() -> dict[str, Any]:
+    with _lock:
+        return {"enabled": _bot_enabled, "message": "Bot is ON" if _bot_enabled else "Bot is OFF; scheduled provider requests are paused."}
+
+
+def set_bot_enabled(enabled: bool) -> dict[str, Any]:
+    global _bot_enabled
+    with _lock:
+        _bot_enabled = bool(enabled)
+    return bot_status()
 
 
 def configured_symbols() -> list[str]:
@@ -206,7 +219,12 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
 
 
 async def scheduled_refresh_loop() -> None:
-    """Fetch one watchlist symbol each interval while the service is awake."""
+    """Fetch one watchlist symbol each interval only while the bot is ON."""
     while True:
-        await asyncio.to_thread(refresh_snapshot)
-        await asyncio.sleep(refresh_interval_seconds())
+        with _lock:
+            enabled = _bot_enabled
+        if enabled:
+            await asyncio.to_thread(refresh_snapshot)
+            await asyncio.sleep(refresh_interval_seconds())
+        else:
+            await asyncio.sleep(1)
