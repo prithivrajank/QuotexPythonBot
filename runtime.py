@@ -104,13 +104,13 @@ def get_watchlist() -> dict[str, Any]:
         } for key, value in _snapshots.items()}
     symbols = configured_symbols()
     return {
-        "source": "Twelve Data (independent provider; not affiliated with Quotex)",
+        "source": data_source_label(),
         "market_type": "standard forex, not Quotex OTC",
         "symbols": symbols,
         "scanned": snapshots,
         "refresh_interval_seconds": refresh_interval_seconds(),
         "estimated_minutes_per_symbol": round(len(symbols) * refresh_interval_seconds() / 60, 1),
-        "note": "One symbol is fetched per interval to stay near the free API request budget. The full Quotex OTC catalogue is not supplied by Twelve Data.",
+        "note": "One symbol is fetched per interval. QUANTEX is a third-party provider; ensure your plan supports the requested market and endpoints.",
     }
 
 
@@ -185,7 +185,7 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
             "available": True,
             "candle_status": candle_status,
             "candle_age_seconds": candle_age_seconds,
-            "source": "Twelve Data (independent provider; not affiliated with Quotex)",
+            "source": data_source_label(),
             "market_type": "standard forex, not Quotex OTC",
             "symbol": selected,
             "watchlist": symbols,
@@ -212,7 +212,7 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
     except (MarketDataError, ValueError, TypeError) as exc:
         error_snapshot = {
             "available": False,
-            "source": "Twelve Data (independent provider; not affiliated with Quotex)",
+            "source": data_source_label(),
             "market_type": "standard forex, not Quotex OTC",
             "symbol": selected,
             "watchlist": symbols,
