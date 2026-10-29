@@ -109,7 +109,8 @@ def _telegram_alert(snapshot: dict[str, Any]) -> None:
     text = (
         "Forex signal summary (standard forex, NOT Quotex OTC)\n"
         f"Symbol: {symbol}\n"
-        f"Timeframe: {snapshot['timeframe_seconds']} seconds\n"
+        f"Candle timeframe: {snapshot['timeframe_seconds']} seconds (1-minute candle)\n"
+        f"Trade expiry: {str(analysis.get('expiry_recommendation_minutes')) + ' minute(s)' if analysis.get('expiry_recommendation_minutes') else 'WAIT / no expiry'}\n"
         f"Candle status: {snapshot.get('candle_status', 'provider-update-dependent')}\n"
         f"Signal: {signal}\n"
         f"Strength: {analysis.get('signal_strength', 'N/A')} (heuristic, not probability)\n"
