@@ -1,4 +1,4 @@
-"""Quota-aware scheduled market refresh and optional Telegram signal alerts."""
+"""Quota-aware multi-symbol scheduler and optional Telegram signal alerts."""
 from __future__ import annotations
 
 import asyncio
@@ -13,18 +13,33 @@ from data_collector import MarketDataError, get_candles
 from signal_history import record_signal, score_due_outcomes
 from strategies import analyze_candles, build_chart_data
 
-SYMBOL = os.getenv("FOREX_SYMBOL", "EUR/USD").strip().upper()
+DEFAULT_SYMBOLS = [
+    "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
+    "USD/CHF", "NZD/USD", "EUR/GBP", "EUR/JPY", "GBP/JPY",
+]
 TIMEFRAME_SECONDS = int(os.getenv("FOREX_TIMEFRAME_SECONDS", "60"))
 CANDLE_LIMIT = 100
 DEFAULT_REFRESH_SECONDS = 300
 _lock = threading.Lock()
-_snapshot: dict[str, Any] = {
-    "available": False,
-    "source": "Twelve Data (independent provider; not affiliated with Quotex)",
-    "market_type": "standard forex, not Quotex OTC",
-    "message": "Waiting for the first scheduled refresh.",
-}
-_last_alerted_signal: str | None = None
+_snapshots: dict[str, dict[str, Any]] = {}
+_next_symbol_index = 0
+_last_alerted_signal: dict[str, str] = {}
+
+
+def configured_symbols() -> list[str]:
+    """Read a comma-separated watchlist; one provider request scans one symbol."""
+    raw = os.getenv("FOREX_SYMBOLS", "").strip()
+    if not raw:
+        legacy = os.getenv("FOREX_SYMBOL", "").strip()
+        raw = legacy or ",".join(DEFAULT_SYMBOLS)
+    symbols: list[str] = []
+    seen: set[str] = set()
+    for item in raw.split(","):
+        symbol = item.strip().upper().replace("-", "/")
+        if symbol and symbol not in seen:
+            symbols.append(symbol)
+            seen.add(symbol)
+    return symbols or DEFAULT_SYMBOLS.copy()
 
 
 def refresh_interval_seconds() -> int:
@@ -36,9 +51,45 @@ def refresh_interval_seconds() -> int:
     return max(DEFAULT_REFRESH_SECONDS, min(requested, 3600))
 
 
-def get_snapshot() -> dict[str, Any]:
+def get_snapshot(symbol: str | None = None) -> dict[str, Any]:
     with _lock:
-        return dict(_snapshot)
+        if symbol:
+            return dict(_snapshots.get(symbol.upper().replace("-", "/"), {
+                "available": False,
+                "symbol": symbol.upper().replace("-", "/"),
+                "market_type": "standard forex, not Quotex OTC",
+                "message": "This symbol has not been scanned yet. Wait for its turn in the rotating watchlist.",
+            }))
+        if _snapshots:
+            # Most recently refreshed symbol snapshot.
+            return dict(max(_snapshots.values(), key=lambda x: x.get("updated_at", "")))
+    return {
+        "available": False,
+        "source": "Twelve Data (independent provider; not affiliated with Quotex)",
+        "market_type": "standard forex, not Quotex OTC",
+        "message": "Waiting for the first scheduled refresh.",
+        "watchlist": configured_symbols(),
+    }
+
+
+def get_watchlist() -> dict[str, Any]:
+    with _lock:
+        snapshots = {key: {
+            "available": value.get("available", False),
+            "signal": (value.get("analysis") or {}).get("signal"),
+            "updated_at": value.get("updated_at"),
+            "message": value.get("message"),
+        } for key, value in _snapshots.items()}
+    symbols = configured_symbols()
+    return {
+        "source": "Twelve Data (independent provider; not affiliated with Quotex)",
+        "market_type": "standard forex, not Quotex OTC",
+        "symbols": symbols,
+        "scanned": snapshots,
+        "refresh_interval_seconds": refresh_interval_seconds(),
+        "estimated_minutes_per_symbol": round(len(symbols) * refresh_interval_seconds() / 60, 1),
+        "note": "One symbol is fetched per interval to stay near the free API request budget. The full Quotex OTC catalogue is not supplied by Twelve Data.",
+    }
 
 
 def _telegram_alert(snapshot: dict[str, Any]) -> None:
@@ -46,11 +97,10 @@ def _telegram_alert(snapshot: dict[str, Any]) -> None:
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
     if not token or not chat_id:
         return
-    global _last_alerted_signal
+    symbol = snapshot["symbol"]
     signal = snapshot["analysis"]["signal"]
-    previous = _last_alerted_signal
-    _last_alerted_signal = signal
-    # Send the first summary, then only send subsequent signal changes to avoid spam.
+    previous = _last_alerted_signal.get(symbol)
+    _last_alerted_signal[symbol] = signal
     if previous is not None and signal == previous:
         return
 
@@ -58,7 +108,7 @@ def _telegram_alert(snapshot: dict[str, Any]) -> None:
     candle = snapshot["latest_candle"]
     text = (
         "Forex signal summary (standard forex, NOT Quotex OTC)\n"
-        f"Symbol: {snapshot['symbol']}\n"
+        f"Symbol: {symbol}\n"
         f"Timeframe: {snapshot['timeframe_seconds']} seconds\n"
         f"Signal: {signal}\n"
         f"Reason: {analysis.get('reason', 'N/A')}\n"
@@ -76,26 +126,36 @@ def _telegram_alert(snapshot: dict[str, Any]) -> None:
         )
         response.raise_for_status()
     except requests.RequestException:
-        # Never fail market data refresh because Telegram is unavailable.
         return
 
 
-def refresh_snapshot() -> dict[str, Any]:
-    """Make exactly one candle API request, calculate indicators, store history."""
-    global _snapshot
+def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
+    """Fetch one symbol; scheduled calls rotate through the watchlist."""
+    global _next_symbol_index
+    symbols = configured_symbols()
+    if symbol:
+        selected = symbol.strip().upper().replace("-", "/")
+        if selected not in symbols:
+            raise ValueError(f"{selected} is not in FOREX_SYMBOLS. Add it in Render Environment first.")
+    else:
+        with _lock:
+            selected = symbols[_next_symbol_index % len(symbols)]
+            _next_symbol_index = (_next_symbol_index + 1) % len(symbols)
+
     try:
-        candles = get_candles(SYMBOL, TIMEFRAME_SECONDS, CANDLE_LIMIT)
+        candles = get_candles(selected, TIMEFRAME_SECONDS, CANDLE_LIMIT)
         if not candles:
             raise MarketDataError("Provider returned zero candles.")
         analysis = analyze_candles(candles)
         latest = candles[-1]
-        record = record_signal(SYMBOL, TIMEFRAME_SECONDS, latest, analysis)
-        score_due_outcomes(SYMBOL, TIMEFRAME_SECONDS, latest, horizon_candles=5)
+        record = record_signal(selected, TIMEFRAME_SECONDS, latest, analysis)
+        score_due_outcomes(selected, TIMEFRAME_SECONDS, latest, horizon_candles=5)
         snapshot = {
             "available": True,
             "source": "Twelve Data (independent provider; not affiliated with Quotex)",
             "market_type": "standard forex, not Quotex OTC",
-            "symbol": SYMBOL,
+            "symbol": selected,
+            "watchlist": symbols,
             "timeframe_seconds": TIMEFRAME_SECONDS,
             "count": len(candles),
             "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -106,11 +166,12 @@ def refresh_snapshot() -> dict[str, Any]:
             "signal_history_inserted": record["inserted"],
             "message": "Scheduled refresh successful.",
             "refresh_interval_seconds": refresh_interval_seconds(),
+            "estimated_minutes_per_symbol": round(len(symbols) * refresh_interval_seconds() / 60, 1),
             "telegram_configured": bool(os.getenv("TELEGRAM_BOT_TOKEN", "").strip() and os.getenv("TELEGRAM_CHAT_ID", "").strip()),
             "disclaimer": "Standard forex, not Quotex OTC. Heuristic only; not financial advice or a guarantee.",
         }
         with _lock:
-            _snapshot = snapshot
+            _snapshots[selected] = snapshot
         if record["inserted"]:
             _telegram_alert(snapshot)
         return dict(snapshot)
@@ -119,18 +180,21 @@ def refresh_snapshot() -> dict[str, Any]:
             "available": False,
             "source": "Twelve Data (independent provider; not affiliated with Quotex)",
             "market_type": "standard forex, not Quotex OTC",
+            "symbol": selected,
+            "watchlist": symbols,
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "message": str(exc),
             "refresh_interval_seconds": refresh_interval_seconds(),
+            "estimated_minutes_per_symbol": round(len(symbols) * refresh_interval_seconds() / 60, 1),
             "telegram_configured": bool(os.getenv("TELEGRAM_BOT_TOKEN", "").strip() and os.getenv("TELEGRAM_CHAT_ID", "").strip()),
         }
         with _lock:
-            _snapshot = error_snapshot
+            _snapshots[selected] = error_snapshot
         return dict(error_snapshot)
 
 
 async def scheduled_refresh_loop() -> None:
-    """Refresh once on startup, then every >=300 seconds while service is awake."""
+    """Fetch one watchlist symbol each interval while the service is awake."""
     while True:
         await asyncio.to_thread(refresh_snapshot)
         await asyncio.sleep(refresh_interval_seconds())
