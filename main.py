@@ -77,7 +77,7 @@ def candles(
     try:
         result = get_candles(asset, timeframe_seconds, limit)
         return {
-            "source": "Twelve Data (independent provider; not affiliated with Quotex)",
+            "source": data_source_label(),
             "market_type": "standard forex, not Quotex OTC",
             "symbol": asset,
             "timeframe_seconds": timeframe_seconds,
@@ -102,7 +102,7 @@ def analysis(
         result = get_candles(asset, timeframe_seconds, limit)
         summary = analyze_candles(result)
         return {
-            "source": "Twelve Data (independent provider; not affiliated with Quotex)",
+            "source": data_source_label(),
             "market_type": "standard forex, not Quotex OTC",
             "symbol": asset,
             "timeframe_seconds": timeframe_seconds,
