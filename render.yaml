@@ -17,8 +17,8 @@ services:
         sync: false
       - key: REFRESH_INTERVAL_SECONDS
         value: "300"
-      - key: FOREX_SYMBOL
-        value: "EUR/USD"
+      - key: FOREX_SYMBOLS
+        value: "EUR/USD,GBP/USD,USD/JPY,AUD/USD,USD/CAD,USD/CHF,NZD/USD,EUR/GBP,EUR/JPY,GBP/JPY"
       - key: FOREX_TIMEFRAME_SECONDS
         value: "60"
       - key: DATABASE_PATH
