@@ -110,7 +110,7 @@ def get_watchlist() -> dict[str, Any]:
         "scanned": snapshots,
         "refresh_interval_seconds": refresh_interval_seconds(),
         "estimated_minutes_per_symbol": round(len(symbols) * refresh_interval_seconds() / 60, 1),
-        "note": "One symbol is fetched per interval. QUANTEX is a third-party provider; ensure your plan supports the requested market and endpoints.",
+        "note": ("OTCharts free tier: manual refresh only to protect the 200-request first-month allowance; no live stream." if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "otcharts" else "One symbol is fetched per interval. Provider is third-party; ensure your plan supports the requested market and endpoints."),
     }
 
 
@@ -234,8 +234,11 @@ async def scheduled_refresh_loop() -> None:
     while True:
         with _lock:
             enabled = _bot_enabled
-        if enabled:
+        provider = os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower()
+        if enabled and provider != "otcharts":
             await asyncio.to_thread(refresh_snapshot)
             await asyncio.sleep(refresh_interval_seconds())
         else:
-            await asyncio.sleep(1)
+            # OTCharts free tier allows only 200 requests in its first month and no live stream.
+            # Avoid background polling; users must explicitly refresh one selected pair.
+            await asyncio.sleep(5 if not enabled else 60)
