@@ -10,10 +10,12 @@ services:
       - key: PYTHON_VERSION
         value: 3.11.11
       - key: MARKET_DATA_PROVIDER
-        value: "twelve_data"
+        value: "otcharts"
       - key: TWELVE_DATA_API_KEY
         sync: false
       - key: QUANTEX_API_KEY
+        sync: false
+      - key: OTCHARTS_API_KEY
         sync: false
       - key: QUANTEX_BROKER
         value: "quotex"
@@ -24,7 +26,7 @@ services:
       - key: REFRESH_INTERVAL_SECONDS
         value: "300"
       - key: FOREX_SYMBOLS
-        value: "EUR/USD,GBP/USD,USD/JPY,AUD/USD,USD/CAD,USD/CHF,NZD/USD,EUR/GBP,EUR/JPY,GBP/JPY"
+        value: "EURUSD_otc,GBPUSD_otc,USDJPY_otc,AUDUSD_otc,USDCAD_otc"
       - key: FOREX_TIMEFRAME_SECONDS
         value: "60"
       - key: DATABASE_PATH
