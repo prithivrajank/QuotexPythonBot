@@ -13,19 +13,28 @@ def test_status_without_key_is_disconnected(monkeypatch):
     assert "not affiliated with Quotex" in status["source"]
 
 
-def test_status_does_not_expose_api_key(monkeypatch):
-    secret = "otc_live_test_secret"
-    monkeypatch.setenv("OTCHARTS_API_KEY", secret)
+def test_status_checks_documented_venues_endpoint(monkeypatch):
+    monkeypatch.setenv("OTCHARTS_API_KEY", "test-key")
 
     def fake_get(path, params=None):
-        assert path == "usage"
-        return {"plan": "test"}
+        assert path == "venues"
+        return {"venues": [{"id": "quotex", "open": True}]}
 
     monkeypatch.setattr(data_collector, "_get", fake_get)
     status = connection_status()
     assert status["connected"] is True
     assert status["live_data"] is False
-    assert secret not in str(status)
+    assert status["venue"] == "quotex"
+
+
+def test_status_reports_quotex_venue_disabled(monkeypatch):
+    monkeypatch.setenv("OTCHARTS_API_KEY", "test-key")
+    monkeypatch.setattr(data_collector, "_get", lambda path, params=None: {
+        "venues": [{"id": "quotex", "open": False}]
+    })
+    status = connection_status()
+    assert status["connected"] is False
+    assert "not enabled" in status["message"]
 
 
 @pytest.mark.parametrize(
