@@ -21,7 +21,7 @@ DEFAULT_QUANTEX_SYMBOLS = ["EURUSD_otc", "GBPUSD_otc", "USDJPY_otc", "EURUSD", "
 
 
 def _normalize_symbol(value: str) -> str:
-    if os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower() == "quantex":
+    if os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower() in ("quantex", "otcharts"):
         value = value.strip()
         return value[:-4] + "_otc" if value.lower().endswith("_otc") else value.replace("/", "").replace("-", "").upper()
     return value.strip().upper().replace("-", "/")
@@ -52,7 +52,7 @@ def configured_symbols() -> list[str]:
     raw = os.getenv("FOREX_SYMBOLS", "").strip()
     if not raw:
         legacy = os.getenv("FOREX_SYMBOL", "").strip()
-        defaults = DEFAULT_QUANTEX_SYMBOLS if os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower() == "quantex" else DEFAULT_SYMBOLS
+        defaults = DEFAULT_QUANTEX_SYMBOLS if os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower() in ("quantex", "otcharts") else DEFAULT_SYMBOLS
         raw = legacy or ",".join(defaults)
     symbols: list[str] = []
     seen: set[str] = set()
@@ -188,7 +188,7 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
             "candle_status": candle_status,
             "candle_age_seconds": candle_age_seconds,
             "source": data_source_label(),
-            "market_type": "standard forex, not Quotex OTC",
+            "market_type": "Quotex OTC / provider-specific" if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() in ("quantex", "otcharts") else "standard forex, not Quotex OTC",
             "symbol": selected,
             "watchlist": symbols,
             "timeframe_seconds": TIMEFRAME_SECONDS,
