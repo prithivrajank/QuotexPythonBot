@@ -11,5 +11,17 @@ services:
         value: 3.11.11
       - key: TWELVE_DATA_API_KEY
         sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: REFRESH_INTERVAL_SECONDS
+        value: "300"
+      - key: FOREX_SYMBOL
+        value: "EUR/USD"
+      - key: FOREX_TIMEFRAME_SECONDS
+        value: "60"
+      - key: DATABASE_PATH
+        value: "/tmp/forex_signal_history.db"
       - key: QUOTEX_DEMO
         value: "true"
