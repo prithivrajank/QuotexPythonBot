@@ -1,50 +1,65 @@
-# Standard Forex Data & Signal Bot
+# Standard Forex Chart, Signals & History
 
-Signal-only project for Render. Automatic trade execution is not implemented.
+Read-only dashboard for Twelve Data standard forex OHLC. This project is not affiliated with Quotex and does not fetch Quotex OTC prices or place trades.
 
-## Data source and important limitation
+## Features
 
-This version uses Twelve Data's free Basic REST API to retrieve standard forex OHLC candles. Twelve Data is an independent market-data provider and is not affiliated with Quotex. **This is not a Quotex API and these candles are not Quotex OTC/synthetic prices.** Prices and resulting signals can differ from what the Quotex platform displays.
+- Candlestick chart with EMA(9), EMA(21), and Bollinger Bands.
+- MACD (12, 26, 9) histogram and signal line.
+- RSI(14), 20-candle support and resistance.
+- Scheduled market refresh every five minutes while the Render service is awake.
+- Optional Telegram CALL/PUT/WAIT summaries; alerts are sent on the first signal and when the signal changes, to reduce spam.
+- SQLite signal history and a simple five-candle later price comparison.
 
-Twelve Data currently lists its Basic plan at $0/month, with 800 API credits per day and no credit card required. The free plan provides REST data; WebSocket streaming is a paid-plan feature. Confirm current limits on the official pricing page: https://twelvedata.com/pricing.
+## Twelve Data setup
 
-## Set up the free API key
+1. Create a free account at https://twelvedata.com and copy the API key.
+2. In Render → your service → Environment, set `TWELVE_DATA_API_KEY`.
+3. Deploy the latest commit.
+4. Open `/api/status` to check the key and `/api/latest` to check the scheduled cache.
 
-1. Create an account at https://twelvedata.com and copy your API key from the dashboard.
-2. In Render, open your web service → Environment.
-3. Add `TWELVE_DATA_API_KEY` with your API key as the value. Never put it in code, `render.yaml`, screenshots, or GitHub.
-4. Save and redeploy the latest commit.
-5. Open `/api/status`. A successful status means the key was accepted by the usage endpoint; request `/api/candles` to confirm your chosen pair/interval is available.
+Twelve Data's free plan has a daily credit limit. The scheduler clamps the interval to at least 300 seconds, or about 288 candle requests per day if it runs continuously. Browser polling reads the cached snapshot and does not use provider credits. The manual **Refresh now** button makes one extra candle request. The API status check may also use a credit.
 
-## Read-only endpoints
+Free Render web services can spin down when idle. While the service is asleep, the scheduler cannot run; it refreshes again when the service wakes. The free Twelve Data REST API is polled, not a tick-by-tick WebSocket stream.
 
-- `/health`: web-service health only.
-- `/api/status`: checks the API key through Twelve Data's `/api_usage` endpoint (uses one API credit).
-- `/api/assets`: retrieves the current forex-pair catalogue from Twelve Data.
-- `/api/candles?asset=EUR%2FUSD&timeframe_seconds=60&limit=100`: returns standard forex OHLC candles if your plan supports the requested pair.
-- `/api/analysis?asset=EUR%2FUSD&timeframe_seconds=60&limit=100`: fetches 100 candles and returns a CALL/PUT/WAIT starter heuristic summary plus the latest 10 candles. One candle API request per analysis refresh.
+## Optional Telegram alerts
 
-The dashboard has a **Refresh candles & analysis** button, a recent OHLC table, and a starter EMA(9)/EMA(21) + RSI(14) summary. Refresh manually; do not poll rapidly or waste the daily quota. CALL/PUT/WAIT labels are not validated predictions and do not guarantee future results.
+1. In Telegram, create a bot using the official `@BotFather` and copy its token.
+2. Open a chat with your bot and send it a message; for a group, add the bot to the group and ensure it can send messages.
+3. Obtain your chat ID using a trusted Telegram bot/API method.
+4. In Render → Environment, set:
+   - `TELEGRAM_BOT_TOKEN` = the bot token
+   - `TELEGRAM_CHAT_ID` = your personal or group chat ID
+5. Redeploy. Do not paste tokens into chat, source code, or GitHub. If these variables are absent, the dashboard and scheduled data still work without Telegram.
 
-Example Python usage:
+Telegram messages contain the current heuristic signal and indicator summary. To avoid alert spam, notifications are sent for the first generated signal and later signal changes, not every five-minute refresh.
 
-```python
-from data_collector import get_assets, get_candles
+## Environment variables
 
-pairs = get_assets()
-print(pairs[:5])
+- `TWELVE_DATA_API_KEY` — required.
+- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — optional, both required to send alerts.
+- `REFRESH_INTERVAL_SECONDS` — defaults to 300 and cannot be set below 300.
+- `FOREX_SYMBOL` — defaults to `EUR/USD`.
+- `FOREX_TIMEFRAME_SECONDS` — defaults to 60.
+- `DATABASE_PATH` — defaults to `/tmp/forex_signal_history.db`.
 
-candles = get_candles("EUR/USD", timeframe_seconds=60, limit=100)
-for candle in candles:
-    print(candle["time"], candle["open"], candle["high"], candle["low"], candle["close"])
-```
+## Endpoints
 
-Supported timeframe seconds: 60, 300, 900, 1800, 2700, 3600, 7200, 14400, 28800, 86400, 604800, and 2592000. Candle records are validated and sorted oldest-first. No fake candles are returned if the provider fails.
+- `/health`: service health.
+- `/api/status`: Twelve Data key/usage check.
+- `/api/assets`: current forex symbol list.
+- `/api/candles?asset=EUR%2FUSD&timeframe_seconds=60&limit=100`: direct candle request.
+- `/api/analysis?asset=EUR%2FUSD&timeframe_seconds=60&limit=100`: one-off analysis request.
+- `/api/latest`: cached scheduled result; does not call Twelve Data.
+- `POST /api/refresh`: force a fresh request; uses provider quota.
+- `/api/history?limit=50`: signal history and summary.
 
-## Render environment variable
+## Signal history limitations
 
-`render.yaml` declares `TWELVE_DATA_API_KEY` with `sync: false`; enter the actual secret through Render's Environment settings. If an older `OTCHARTS_API_KEY` exists, you can remove it after confirming the new version works.
+A signal is recorded once per candle timestamp. After five candles, CALL/PUT records are marked WIN/LOSS/FLAT based on whether the standard forex close moved in the indicated direction; WAIT records become SKIPPED. This is only a simplified price-direction comparison, not a backtest, trade execution, or verified return.
 
-## Strategy and limitations
+SQLite history defaults to `/tmp` and **can be lost on Render free service restart/redeploy**. Set `DATABASE_PATH` to a genuinely persistent mounted path or add an external database if durable history is needed. The current free Render filesystem should not be assumed persistent.
 
-`strategies.py` contains a preliminary EMA(9)/EMA(21), candle direction, and RSI(14) heuristic. It must be tested on timestamped historical data. Standard forex candles are only reference data and should not be represented as exact Quotex OTC prices. Signals do not guarantee future results.
+## Disclaimer
+
+All market data is standard forex, not Quotex OTC/synthetic pricing. OTC prices can differ. CALL/PUT/WAIT labels are unvalidated heuristics, not financial advice, and do not guarantee future outcomes.
