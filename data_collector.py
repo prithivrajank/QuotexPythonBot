@@ -17,12 +17,13 @@ BASE_URL = "https://api.twelvedata.com"
 SOURCE = "Twelve Data standard forex (independent provider; not Quotex OTC)"
 
 QUANTEX_BASE_URL = "https://api.quantexbot.pro/v1"
+OTCHARTS_BASE_URL = "https://otcharts.com"
 
 def _provider() -> str:
     return os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower()
 
 def data_source_label() -> str:
-    return "QUANTEX third-party Quotex market-data API (not operated by Quotex)" if _provider() == "quantex" else SOURCE
+    return ("OTCharts third-party Quotex market-data API (not operated by Quotex)" if _provider() == "otcharts" else "QUANTEX third-party Quotex market-data API (not operated by Quotex)" if _provider() == "quantex" else SOURCE)
 
 def _qx_request(path: str, params: dict[str, Any]) -> dict[str, Any]:
     key = os.getenv("QUANTEX_API_KEY", "").strip()
@@ -72,6 +73,73 @@ def _qx_candles(asset: str, timeframe_seconds: int, limit: int) -> list[dict[str
             "venue": "quantex", "market_type": "OTC" if symbol.lower().endswith("_otc") else "live forex", "source": data_source_label()})
     result.sort(key=lambda item: item["time"])
     return result[-limit:]
+
+
+def _otcharts_request(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    key = os.getenv("OTCHARTS_API_KEY", "").strip()
+    if not key:
+        raise MarketDataError("OTCHARTS_API_KEY is missing. Add it in Render Environment.")
+    try:
+        response = requests.get(
+            f"{OTCHARTS_BASE_URL}/{path.lstrip('/')}",
+            params=params or {},
+            headers={"Authorization": f"Bearer {key}", "User-Agent": "QuotexPythonBot-readonly/1.0"},
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        raise MarketDataError(f"Could not reach OTCharts API: {type(exc).__name__}.") from None
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    if response.status_code == 401:
+        raise MarketDataError("OTCharts rejected the API key (HTTP 401). Check OTCHARTS_API_KEY and confirm your email.")
+    if response.status_code == 403:
+        raise MarketDataError(f"OTCharts access denied (HTTP 403): {str(body.get('error', 'Check that your free key is set to the Quotex book and supports this instrument.'))[:180]}")
+    if response.status_code == 429:
+        raise MarketDataError("OTCharts request quota/stream limit reached (HTTP 429). Check your plan usage.")
+    if not response.ok or not isinstance(body, dict):
+        err = body.get("error", "Unexpected response") if isinstance(body, dict) else "Unexpected response"
+        raise MarketDataError(f"OTCharts API error {response.status_code}: {str(err)[:180]}")
+    if body.get("error"):
+        raise MarketDataError(f"OTCharts API error: {str(body['error'])[:180]}")
+    return body
+
+
+def _otcharts_candles(asset: str, timeframe_seconds: int, limit: int) -> list[dict[str, Any]]:
+    if timeframe_seconds not in (60, 300, 900, 1800, 3600, 14400):
+        raise ValueError("OTCharts supports candle timeframes in seconds: 60, 300, 900, 1800, 3600 and 14400.")
+    symbol = asset.strip()
+    if symbol.lower().endswith("_otc"):
+        symbol = symbol[:-4] + "_otc"
+    else:
+        symbol = symbol.replace("/", "").replace("-", "").upper()
+    body = _otcharts_request("v1/candles", {
+        "venue": "quotex", "symbol": symbol, "tf": timeframe_seconds, "limit": min(max(limit, 1), 5000)
+    })
+    rows = body.get("candles", [])
+    if not isinstance(rows, list):
+        raise MarketDataError("OTCharts response did not contain a candles list.")
+    result: list[dict[str, Any]] = []
+    for i, row in enumerate(rows):
+        try:
+            timestamp = int(row["time"])
+            vals = {k: float(row[k]) for k in ("open", "high", "low", "close")}
+        except (KeyError, TypeError, ValueError, OverflowError):
+            raise MarketDataError(f"OTCharts candle #{i + 1} has invalid fields.") from None
+        if timestamp < 0 or any(not math.isfinite(v) for v in vals.values()):
+            raise MarketDataError(f"OTCharts candle #{i + 1} contains invalid values.")
+        o, h, low, c = vals["open"], vals["high"], vals["low"], vals["close"]
+        if h < max(o, c, low) or low > min(o, c, h):
+            raise MarketDataError(f"OTCharts candle #{i + 1} has inconsistent OHLC values.")
+        result.append({
+            "time": timestamp, **vals, "symbol": symbol, "timeframe_seconds": timeframe_seconds,
+            "venue": "otcharts", "market_type": "Quotex OTC" if symbol.lower().endswith("_otc") else "Quotex",
+            "source": data_source_label(),
+        })
+    result.sort(key=lambda item: item["time"])
+    return result[-limit:]
+
 
 TIMEOUT_SECONDS = 12
 TIMEFRAME_MAP = {
@@ -145,6 +213,13 @@ def _get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
 
 def connection_status() -> dict[str, Any]:
     """Validate the selected market-data provider."""
+    if _provider() == "otcharts":
+        if not os.getenv("OTCHARTS_API_KEY", "").strip():
+            return {"connected": False, "live_data": False, "credentials_configured": False,
+                    "message": "OTCHARTS_API_KEY is missing. Add it in Render Environment.", "source": data_source_label()}
+        return {"connected": True, "live_data": False, "credentials_configured": True,
+                "message": "OTCharts API key is configured. Use Refresh selected pair to verify candle access; the free key has limited requests and no live streaming.",
+                "source": data_source_label(), "market_type": "Quotex OTC", "affiliation": "Third-party provider; not operated by Quotex."}
     if _provider() == "quantex":
         if not os.getenv("QUANTEX_API_KEY", "").strip():
             return {"connected": False, "live_data": False, "credentials_configured": False,
@@ -193,6 +268,15 @@ def connection_status() -> dict[str, Any]:
 
 def get_assets() -> list[dict[str, Any]]:
     """Fetch the selected provider's available pair catalogue."""
+    if _provider() == "otcharts":
+        body = _otcharts_request("v1/symbols", {"venue": "quotex"})
+        pairs = body.get("symbols", [])
+        if not isinstance(pairs, list) or not pairs:
+            raise MarketDataError("OTCharts returned no Quotex symbols. Check that your API key's selected book is Quotex.")
+        return [{"symbol": pair["symbol"], "name": pair.get("name", pair["symbol"]),
+                 "market_type": "Quotex OTC" if str(pair["symbol"]).lower().endswith("_otc") else "Quotex",
+                 "venue": "otcharts", "source": data_source_label()}
+                for pair in pairs if isinstance(pair, dict) and isinstance(pair.get("symbol"), str)]
     if _provider() == "quantex":
         result: list[dict[str, Any]] = []
         broker = os.getenv("QUANTEX_BROKER", "quotex")
@@ -232,6 +316,10 @@ def get_candles(
     """Fetch real standard-forex OHLC bars, oldest first; never fabricate candles."""
     if not isinstance(asset, str) or not asset.strip():
         raise ValueError("asset must not be empty")
+    if _provider() == "otcharts":
+        if any(ch.isspace() for ch in asset.strip()):
+            raise ValueError("asset must be a pair symbol without spaces")
+        return _otcharts_candles(asset, timeframe_seconds, limit)
     if _provider() == "quantex":
         if any(ch.isspace() for ch in asset.strip()):
             raise ValueError("asset must be a pair symbol without spaces")
