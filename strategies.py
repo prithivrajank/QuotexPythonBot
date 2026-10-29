@@ -101,18 +101,28 @@ def analyze_candles(candles: list[dict], min_rows: int = 30) -> dict:
             float(last_row["close"]) > float(last_row["open"] if direction > 0 else last_row["close"])
             if direction > 0 else float(last_row["close"]) < float(last_row["open"])
         )
-        if trend_aligned and macd_aligned and aligned_candles >= 2:
+        macd_hist = float(ind["macd_hist"].iloc[-1])
+        previous_macd_hist = float(ind["macd_hist"].iloc[-2])
+        macd_momentum_increasing = (
+            macd_hist > previous_macd_hist if direction > 0 else macd_hist < previous_macd_hist
+        )
+        # Prefer 1 minute when momentum is strong and immediate; prefer 2 minutes
+        # when direction is aligned but the latest candle is less decisive.
+        if (
+            trend_aligned and macd_aligned and macd_momentum_increasing
+            and current_candle_aligned and body_ratio >= 0.65
+        ):
+            expiry_recommendation = 1
+            expiry_reason = "Trend and MACD align, momentum is increasing, and latest candle body is strong; heuristic favours 1 minute"
+            signal_strength = "MODERATE"
+        elif trend_aligned and macd_aligned and aligned_candles >= 2:
             expiry_recommendation = 2
-            expiry_reason = "Trend, MACD, and at least 2 of the last 3 candles align; heuristic favours 2 minutes"
+            expiry_reason = "Trend and MACD align across multiple candles, but immediate momentum is less decisive; heuristic favours 2 minutes"
             signal_strength = "MODERATE"
         else:
             expiry_recommendation = 1
-            expiry_reason = "Short expiry is the conservative heuristic when multi-candle trend confirmation is incomplete"
+            expiry_reason = "Trend confirmation is weak or mixed; 1 minute is only a short-duration heuristic, consider WAIT rather than treating this as a strong entry"
             signal_strength = "LOW"
-        if body_ratio >= 0.65 and current_candle_aligned and trend_aligned and macd_aligned:
-            expiry_recommendation = 1
-            expiry_reason = "Strong aligned latest candle; heuristic favours 1 minute, but the live candle can reverse"
-            signal_strength = "MODERATE"
 
     return {
         "signal": signal,
