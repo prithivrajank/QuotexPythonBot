@@ -6,7 +6,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
 from data_collector import MarketDataError, connection_status, get_assets, get_candles
-from runtime import get_snapshot, get_watchlist, refresh_snapshot, scheduled_refresh_loop
+from runtime import bot_status, get_snapshot, get_watchlist, refresh_snapshot, scheduled_refresh_loop, set_bot_enabled
 from signal_history import get_history, history_summary
 from strategies import analyze_candles, build_chart_data
 
@@ -31,6 +31,18 @@ app = FastAPI(title="Standard Forex Data & Signal Bot", version="0.5.0", lifespa
 @app.get("/health")
 def health():
     return {"status": "ok", "time_utc": datetime.now(timezone.utc).isoformat()}
+
+
+@app.get("/api/bot")
+def bot_state():
+    return bot_status()
+
+
+@app.post("/api/bot/{action}")
+def bot_control(action: str):
+    if action not in {"on", "off"}:
+        raise HTTPException(status_code=422, detail="Action must be on or off")
+    return set_bot_enabled(action == "on")
 
 
 @app.get("/api/status")
