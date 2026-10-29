@@ -22,6 +22,9 @@ Twelve Data currently lists its Basic plan at $0/month, with 800 API credits per
 - `/api/status`: checks the API key through Twelve Data's `/api_usage` endpoint (uses one API credit).
 - `/api/assets`: retrieves the current forex-pair catalogue from Twelve Data.
 - `/api/candles?asset=EUR%2FUSD&timeframe_seconds=60&limit=100`: returns standard forex OHLC candles if your plan supports the requested pair.
+- `/api/analysis?asset=EUR%2FUSD&timeframe_seconds=60&limit=100`: fetches 100 candles and returns a CALL/PUT/WAIT starter heuristic summary plus the latest 10 candles. One candle API request per analysis refresh.
+
+The dashboard has a **Refresh candles & analysis** button, a recent OHLC table, and a starter EMA(9)/EMA(21) + RSI(14) summary. Refresh manually; do not poll rapidly or waste the daily quota. CALL/PUT/WAIT labels are not validated predictions and do not guarantee future results.
 
 Example Python usage:
 
@@ -36,7 +39,7 @@ for candle in candles:
     print(candle["time"], candle["open"], candle["high"], candle["low"], candle["close"])
 ```
 
-Supported timeframe seconds: 60, 300, 900, 1800, 2700, 3600, 7200, 14400, 28800, 86400, 604800, and 2592000. The API uses REST requests; do not poll rapidly or waste your daily quota. Candle records are validated and sorted oldest-first. No fake candles are returned if the provider fails.
+Supported timeframe seconds: 60, 300, 900, 1800, 2700, 3600, 7200, 14400, 28800, 86400, 604800, and 2592000. Candle records are validated and sorted oldest-first. No fake candles are returned if the provider fails.
 
 ## Render environment variable
 
