@@ -9,7 +9,7 @@ from typing import Any
 
 import requests
 
-from data_collector import MarketDataError, get_candles
+from data_collector import MarketDataError, data_source_label, get_candles
 from signal_history import record_signal, score_due_outcomes
 from strategies import analyze_candles, build_chart_data
 
@@ -17,6 +17,14 @@ DEFAULT_SYMBOLS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
     "USD/CHF", "NZD/USD", "EUR/GBP", "EUR/JPY", "GBP/JPY",
 ]
+DEFAULT_QUANTEX_SYMBOLS = ["EURUSD_otc", "GBPUSD_otc", "USDJPY_otc", "EURUSD", "GBPUSD", "USDJPY"]
+
+
+def _normalize_symbol(value: str) -> str:
+    if os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower() == "quantex":
+        value = value.strip()
+        return value[:-4] + "_otc" if value.lower().endswith("_otc") else value.replace("/", "").replace("-", "").upper()
+    return value.strip().upper().replace("-", "/")
 TIMEFRAME_SECONDS = int(os.getenv("FOREX_TIMEFRAME_SECONDS", "60"))
 CANDLE_LIMIT = 100
 DEFAULT_REFRESH_SECONDS = 300
@@ -44,11 +52,12 @@ def configured_symbols() -> list[str]:
     raw = os.getenv("FOREX_SYMBOLS", "").strip()
     if not raw:
         legacy = os.getenv("FOREX_SYMBOL", "").strip()
-        raw = legacy or ",".join(DEFAULT_SYMBOLS)
+        defaults = DEFAULT_QUANTEX_SYMBOLS if os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower() == "quantex" else DEFAULT_SYMBOLS
+        raw = legacy or ",".join(defaults)
     symbols: list[str] = []
     seen: set[str] = set()
     for item in raw.split(","):
-        symbol = item.strip().upper().replace("-", "/")
+        symbol = _normalize_symbol(item)
         if symbol and symbol not in seen:
             symbols.append(symbol)
             seen.add(symbol)
@@ -67,10 +76,10 @@ def refresh_interval_seconds() -> int:
 def get_snapshot(symbol: str | None = None) -> dict[str, Any]:
     with _lock:
         if symbol:
-            return dict(_snapshots.get(symbol.upper().replace("-", "/"), {
+            return dict(_snapshots.get(_normalize_symbol(symbol), {
                 "available": False,
-                "symbol": symbol.upper().replace("-", "/"),
-                "market_type": "standard forex, not Quotex OTC",
+                "symbol": _normalize_symbol(symbol),
+                "market_type": "provider-specific live/OTC market",
                 "message": "This symbol has not been scanned yet. Wait for its turn in the rotating watchlist.",
             }))
         if _snapshots:
@@ -78,7 +87,7 @@ def get_snapshot(symbol: str | None = None) -> dict[str, Any]:
             return dict(max(_snapshots.values(), key=lambda x: x.get("updated_at", "")))
     return {
         "available": False,
-        "source": "Twelve Data (independent provider; not affiliated with Quotex)",
+        "source": data_source_label(),
         "market_type": "standard forex, not Quotex OTC",
         "message": "Waiting for the first scheduled refresh.",
         "watchlist": configured_symbols(),
@@ -152,7 +161,7 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
     global _next_symbol_index
     symbols = configured_symbols()
     if symbol:
-        selected = symbol.strip().upper().replace("-", "/")
+        selected = _normalize_symbol(symbol)
         if selected not in symbols:
             raise ValueError(f"{selected} is not in FOREX_SYMBOLS. Add it in Render Environment first.")
     else:
@@ -192,7 +201,7 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
             "refresh_interval_seconds": refresh_interval_seconds(),
             "estimated_minutes_per_symbol": round(len(symbols) * refresh_interval_seconds() / 60, 1),
             "telegram_configured": bool(os.getenv("TELEGRAM_BOT_TOKEN", "").strip() and os.getenv("TELEGRAM_CHAT_ID", "").strip()),
-            "disclaimer": "Standard forex, not Quotex OTC. Heuristic only; not financial advice or a guarantee.",
+            "disclaimer": "Data source depends on MARKET_DATA_PROVIDER. Third-party market data and heuristic signals are not a guarantee or financial advice.",
         }
         with _lock:
             _snapshots[selected] = snapshot
