@@ -79,9 +79,47 @@ def analyze_candles(candles: list[dict], min_rows: int = 30) -> dict:
 
     support = float(df["low"].tail(20).min())
     resistance = float(df["high"].tail(20).max())
+
+    # Expiry hint is a transparent heuristic, not a probability or win guarantee.
+    expiry_recommendation = None
+    expiry_reason = "WAIT signal: no expiry recommended"
+    signal_strength = "LOW"
+    if signal in {"CALL", "PUT"}:
+        direction = 1 if signal == "CALL" else -1
+        last_row = df.iloc[-1]
+        candle_range = max(float(last_row["high"] - last_row["low"]), 1e-12)
+        body_ratio = abs(float(last_row["close"] - last_row["open"])) / candle_range
+        last_three = df.tail(3)
+        aligned_candles = sum(
+            (float(row["close"]) > float(row["open"])) if direction > 0
+            else (float(row["close"]) < float(row["open"]))
+            for _, row in last_three.iterrows()
+        )
+        trend_aligned = (float(ind["ema9"].iloc[-1]) - float(ind["ema21"].iloc[-1])) * direction > 0
+        macd_aligned = float(ind["macd_hist"].iloc[-1]) * direction > 0
+        current_candle_aligned = (
+            float(last_row["close"]) > float(last_row["open"] if direction > 0 else last_row["close"])
+            if direction > 0 else float(last_row["close"]) < float(last_row["open"])
+        )
+        if trend_aligned and macd_aligned and aligned_candles >= 2:
+            expiry_recommendation = 2
+            expiry_reason = "Trend, MACD, and at least 2 of the last 3 candles align; heuristic favours 2 minutes"
+            signal_strength = "MODERATE"
+        else:
+            expiry_recommendation = 1
+            expiry_reason = "Short expiry is the conservative heuristic when multi-candle trend confirmation is incomplete"
+            signal_strength = "LOW"
+        if body_ratio >= 0.65 and current_candle_aligned and trend_aligned and macd_aligned:
+            expiry_recommendation = 1
+            expiry_reason = "Strong aligned latest candle; heuristic favours 1 minute, but the live candle can reverse"
+            signal_strength = "MODERATE"
+
     return {
         "signal": signal,
         "reason": reason,
+        "expiry_recommendation_minutes": expiry_recommendation,
+        "expiry_reason": expiry_reason,
+        "signal_strength": signal_strength,
         "rsi_14": round(last_rsi, 2) if last_rsi is not None else None,
         "ema_9": round(float(ind["ema9"].iloc[-1]), 6),
         "ema_21": round(float(ind["ema21"].iloc[-1]), 6),
