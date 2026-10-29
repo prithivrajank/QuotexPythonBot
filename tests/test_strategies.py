@@ -28,6 +28,8 @@ def test_analysis_includes_macd_bollinger_and_support_resistance():
     assert "bollinger_middle" in result
     assert "bollinger_lower" in result
     assert result["support_20"] <= result["resistance_20"]
+    assert result["expiry_recommendation_minutes"] in {1, 2, None}
+    assert result["signal_strength"] in {"LOW", "MODERATE"}
 
 
 def test_chart_data_contains_candles_ema_bollinger_and_macd():
