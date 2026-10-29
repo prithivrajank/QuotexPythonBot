@@ -1,122 +1,52 @@
-# Multi-Pair Forex / Quotex Market-Data Analyzer
+# Quotex Market-Data Analyzer (read-only)
 
-Read-only chart and signal dashboard. The data provider is selected with `MARKET_DATA_PROVIDER`. Twelve Data supplies standard forex candles; QUANTEX is a third-party service that documents Quotex live/OTC pair candles. QUANTEX is not operated by Quotex. This project does not place trades.
+This repository provides a dashboard for candle charts and heuristic CALL/PUT/WAIT analysis. It does **not** place trades.
 
-## Providers
+## OTCharts setup (recommended for Quotex OTC data)
 
-- `MARKET_DATA_PROVIDER=twelve_data` (default): use `TWELVE_DATA_API_KEY` and standard forex symbols such as `EUR/USD`.
-- `MARKET_DATA_PROVIDER=quantex`: use `QUANTEX_API_KEY`, `QUANTEX_BROKER=quotex`, and QUANTEX symbols such as `EURUSD_otc` for OTC or `EURUSD` for a live pair. Set `FOREX_SYMBOLS` to the exact symbols returned by QUANTEX `/v1/pairs`.
+Quotex does not publish an official public API. OTCharts is an independent third-party, read-only market-data provider; it is not operated by, affiliated with, or endorsed by Quotex.
 
-QUANTEX docs: https://quantexbot.pro/docs/api and https://quantexbot.pro/docs/api/candles. The candle endpoint requires the `candles:read` permission and a plan that includes candle data. To list pairs, the key also needs the appropriate pair/market read permission. Confirm plan access in your QUANTEX account before deploying.
+1. Create an account at https://otcharts.com/api-key and confirm your email.
+2. Create an API key and select the **Quotex** book for that key. The key is shown only once; keep it private.
+3. In Render → your `quotex-live-signal-bot` service → **Environment**, set:
+   - `MARKET_DATA_PROVIDER=otcharts`
+   - `OTCHARTS_API_KEY` = your key (secret; never put it in GitHub, a URL, frontend code, or this chat)
+   - `FOREX_SYMBOLS` = up to five exact symbols allowed by your free key, copied from the OTCharts catalogue, e.g. `EURUSD_otc,GBPUSD_otc,USDJPY_otc,AUDUSD_otc,USDCAD_otc` only if those are included in your key's five free instruments.
+   - `FOREX_TIMEFRAME_SECONDS=60`
+4. Save the environment settings and redeploy.
+5. Open `/api/status`, then use **Refresh selected pair (uses 1 request)** once to test candle access. A configured key is not considered validated until a candle request succeeds.
 
-## Secure setup on Render for QUANTEX
+The API uses `GET https://otcharts.com/v1/symbols?venue=quotex` and `GET https://otcharts.com/v1/candles?venue=quotex&symbol=EURUSD_otc&tf=60&limit=100`. Symbols must match the API catalogue exactly. See https://otcharts.com/api and https://otcharts.com/quotex-api.
 
-1. Open Render Dashboard → your `quotex-live-signal-bot` service → **Environment**.
-2. Add `MARKET_DATA_PROVIDER` = `quantex`.
-3. Add `QUANTEX_API_KEY` = your secret API key. Never put the key in GitHub, frontend JavaScript, a URL, a screenshot, or this chat.
-4. Add `QUANTEX_BROKER` = `quotex`.
-5. Change `FOREX_SYMBOLS` to a comma-separated list of symbols returned by QUANTEX. Example only: `EURUSD_otc,GBPUSD_otc,EURUSD,GBPUSD`. Verify exact pair symbols from the API pair catalogue and your plan.
-6. Save and deploy. Check `/api/status`, then `/api/assets`, then the dashboard. A 401 means the key is invalid; 403 usually means permission/plan access is missing; 429 means a limit was reached.
+## Free-tier limitation — important
 
-Render docs for environment variables: https://render.com/docs/configure-environment-variables. Use the Render Environment UI; do not commit secret values to `render.yaml`.
+OTCharts' free tier currently provides one selected book, five instruments, **200 requests in the first month**, and **no live streaming**. For that reason, this repository disables automatic candle polling when `MARKET_DATA_PROVIDER=otcharts`; use manual refresh sparingly, one pair at a time. Each manual refresh uses an API request. The free tier cannot power continuous live signals or automatic Telegram alerts. Live streaming requires an eligible paid plan.
 
-## Important behavior and limitations
+If your key returns an access/plan error, check that the key's selected book is Quotex and that the requested symbol is among the five instruments allowed by the free tier. Never paste the key into chat or commit it to the repository.
 
-- The adapter currently retrieves OHLC candles by REST request. It does not yet consume QUANTEX's live tick stream; chart updates depend on the refresh schedule and provider candle availability.
-- QUANTEX is a third-party data provider, not an official Quotex service. Compare sample candles against the Quotex screen before relying on signals; exact matching is not guaranteed.
-- Signal labels and expiry suggestions are heuristic, not a validated win probability or guarantee.
-- Keep the dashboard bot OFF when not testing to reduce API usage. Manual refresh still makes a provider request.
+## Other providers
 
+- `MARKET_DATA_PROVIDER=twelve_data`: uses `TWELVE_DATA_API_KEY` and standard forex prices, not Quotex OTC/synthetic prices.
+- `MARKET_DATA_PROVIDER=quantex`: uses `QUANTEX_API_KEY` and `QUANTEX_BROKER=quotex`; candle access depends on the provider's plan.
 
-## Features
+Set provider-specific environment variables only in Render's Environment UI. Do not commit secret values to `render.yaml`.
 
-- Configurable multi-pair watchlist and rotating signal scans.
-- Dashboard pair selector, cached chart data, and per-pair Telegram summaries.
-- Candlestick chart with EMA(9), EMA(21), and Bollinger Bands.
-- MACD (12, 26, 9), RSI(14), and rolling 20-candle support/resistance.
-- SQLite signal history with a simple five-candle later price comparison.
-- Heuristic 1-minute vs 2-minute expiry suggestion and a signal-strength label.
-- Candle-window freshness label; updates remain dependent on scheduled REST polling, not tick-by-tick streaming.
+## Dashboard endpoints
 
-## Important: Quotex assets versus Twelve Data
+- `/health` — service health.
+- `/api/status` — selected provider status and setup guidance.
+- `/api/assets` — available instruments from the selected provider.
+- `/api/watchlist` — configured symbols and refresh details.
+- `/api/latest?asset=EURUSD_otc` — cached snapshot.
+- `/api/candles?asset=EURUSD_otc&timeframe_seconds=60&limit=100` — candle request.
+- `/api/analysis?asset=EURUSD_otc&timeframe_seconds=60&limit=100` — analysis request.
+- `POST /api/refresh?asset=EURUSD_otc` — manual refresh; uses provider quota.
+- `/api/history?limit=50` — signal-history summary.
 
-The `/api/assets` endpoint returns Twelve Data's standard forex pair catalogue. Twelve Data does **not** provide the full Quotex-specific asset catalogue, OTC suffixes, or guaranteed matching Quotex OTC/synthetic prices. Therefore, this bot cannot truthfully claim to scan every asset shown in Quotex or send exact Quotex OTC signals. The data and Telegram alerts are labelled **standard forex, not Quotex OTC**.
+## Signal limitations
 
-Official pair-catalogue docs: https://twelvedata.com/docs (see `/forex_pairs`).
-
-## Configure the watchlist
-
-In Render → your web service → Environment, set `FOREX_SYMBOLS` as a comma-separated list of pairs supported by your Twelve Data plan. Example:
-
-```text
-EUR/USD,GBP/USD,USD/JPY,AUD/USD,USD/CAD,USD/CHF,NZD/USD,EUR/GBP,EUR/JPY,GBP/JPY
-```
-
-The dashboard selector and scheduled Telegram alerts use this configured watchlist. You can add or remove pairs there and redeploy. A pair must be supported by your Twelve Data plan; not every catalogue symbol is necessarily available on the free plan. The `/api/assets` endpoint can list the full Twelve Data catalogue, but it does not mean every symbol is available for candle data under your plan.
-
-## Free quota and rotation
-
-The scheduler makes **one candle request per refresh interval** and rotates to the next configured symbol. The minimum interval is 300 seconds (five minutes). With 10 pairs, each pair is scanned about every 50 minutes while the service remains awake. With N pairs, the approximate per-pair scan interval is N × 5 minutes.
-
-With selected-pair auto-refresh enabled every one minute, the browser can make up to about 1,440 selected-pair candle requests/day, plus about 288 background rotating-watchlist requests/day: approximately 1,728 candle requests/day if continuously running. This exceeds an 800-credit/day Basic quota. Monitor account usage and consider a slower refresh interval or a plan that supports this usage.
-
-The free Render service can spin down while idle; the scheduler pauses during sleep and resumes after the service wakes. This is scheduled REST polling, not a tick-by-tick stream. The current five-minute minimum means a configured pair may only be revisited every N × 5 minutes (N = watchlist size), so it cannot guarantee an actionable signal during every 1-minute candle. True live updates require a suitable real-time feed/plan and a quota budget that supports the desired polling frequency.
-
-The expiry hint compares EMA trend, MACD histogram, and the last three candle directions. It is a simple heuristic, not a trained model, tested probability, or guarantee; use demo testing before relying on it. A 1-minute/2-minute expiry is not equivalent to a 1-minute/2-minute candle.
-
-## Twelve Data setup
-
-1. Create a free account at https://twelvedata.com and copy your API key.
-2. In Render → Environment, set `TWELVE_DATA_API_KEY`.
-3. Deploy the latest commit.
-4. Open `/api/status` to check the key and `/api/watchlist` to view configured pairs and scan intervals.
+CALL/PUT/WAIT labels, indicator summaries, and expiry suggestions are heuristic analysis, not validated probabilities, financial advice, or guaranteed predictions. OTC quotes are a broker-specific synthetic series and may differ from standard forex prices. Test against the source chart before relying on any result.
 
 ## Optional Telegram alerts
 
-1. Create a bot with Telegram's official `@BotFather` and copy its token.
-2. Open the bot chat and send it a message; for a group, add the bot to the group and ensure it can send messages.
-3. Obtain your chat ID using a trusted Telegram bot/API method.
-4. In Render → Environment, set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.
-5. Redeploy. Never put tokens in source code, GitHub, or chat.
-
-Alerts contain the symbol, CALL/PUT/WAIT heuristic, RSI, MACD histogram, and support/resistance. Each symbol is tracked independently; the first signal is sent, then notifications are sent only when that symbol's signal changes.
-
-## Environment variables
-
-- `MARKET_DATA_PROVIDER` — `twelve_data` (default) or `quantex`.
-- `TWELVE_DATA_API_KEY` — required when `MARKET_DATA_PROVIDER=twelve_data`.
-- `QUANTEX_API_KEY` — required when `MARKET_DATA_PROVIDER=quantex`; keep it only in Render Environment.
-- `QUANTEX_BROKER` — defaults to `quotex`.
-- `FOREX_SYMBOLS` — comma-separated symbols; use provider-specific format.
-- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` — optional, both needed for alerts.
-- `FOREX_SYMBOLS` — comma-separated watchlist; defaults to 10 major/minor pairs in `render.yaml`.
-- `REFRESH_INTERVAL_SECONDS` — defaults to 300 and cannot be set below 300.
-- `FOREX_TIMEFRAME_SECONDS` — defaults to 60.
-- `DATABASE_PATH` — defaults to `/tmp/forex_signal_history.db`.
-
-## Endpoints
-
-- `/health`: service health.
-- `/api/status`: Twelve Data key/usage check.
-- `/api/assets`: Twelve Data's available standard forex catalogue (one provider request).
-- `/api/watchlist`: configured pairs, cached statuses, and estimated scan interval per pair.
-- `/api/latest?asset=EUR%2FUSD`: read a cached pair snapshot; no Twelve Data candle request.
-- `/api/candles?asset=EUR%2FUSD&timeframe_seconds=60&limit=100`: direct candle request.
-- `/api/analysis?asset=EUR%2FUSD&timeframe_seconds=60&limit=100`: one-off analysis request.
-- `POST /api/refresh?asset=EUR%2FUSD`: force a fresh request for a configured pair; uses quota.
-- `/api/history?limit=50`: cross-pair signal history and summary.
-
-## Signal history limitations
-
-A signal is recorded once per candle timestamp. After five candles, CALL/PUT records are marked WIN/LOSS/FLAT based on whether the standard forex close moved in the indicated direction; WAIT records become SKIPPED. This is a simplified price-direction comparison, not actual trading results or a backtest.
-
-SQLite history defaults to `/tmp` and **can be lost on Render free service restart/redeploy**. Use persistent storage or an external database if durable history is needed.
-
-## Disclaimer
-
-All market data is standard forex, not Quotex OTC/synthetic pricing. OTC prices can differ. CALL/PUT/WAIT labels are unvalidated heuristics, not financial advice, and do not guarantee future outcomes.
-
-
-## Candle timeframe vs trade expiry
-
-The chart/data candle timeframe is fixed at **1 minute** (FOREX_TIMEFRAME_SECONDS=60). The signal strategy may suggest a **1-minute or 2-minute trade expiry** depending on the current indicator alignment, candle body, recent candle direction, and MACD momentum. The expiry suggestion is not the candle timeframe and is only a heuristic. If the signal is WAIT, no expiry should be used. The current REST scheduler still cannot evaluate every forming candle in real time; the dashboard refreshes the selected pair every one minute and the rotating watchlist continues on its five-minute interval. This can exceed typical free API quotas. This is not a guaranteed live feed and may exceed a lower account quota; monitor usage.
+Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in Render Environment. Do not store credentials in source code. With OTCharts' free tier, automatic polling is disabled, so the bot cannot provide continuous scheduled Telegram signals on that tier.
