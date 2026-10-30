@@ -16,7 +16,7 @@ def _credentials() -> tuple[str, str, bool]:
     password = os.getenv("QUOTEX_PASSWORD", "")
     is_demo = os.getenv("QUOTEX_DEMO", "true").strip().lower() in {"1", "true", "yes", "on"}
     if not email or not password:
-        raise RuntimeError("Set QUOTEX_EMAIL and QUOTEX_PASSWORD in Render Environment.")
+        raise ValueError("Set QUOTEX_EMAIL and QUOTEX_PASSWORD in Render Environment.")
     return email, password, is_demo
 
 
@@ -26,13 +26,13 @@ async def _with_client(operation: str, asset: str | None = None, timeframe_secon
     email, password, is_demo = _credentials()
     ok, session = await get_ssid(email=email, password=password, is_demo=is_demo)
     if not ok or not isinstance(session, dict) or not session.get("ssid"):
-        raise RuntimeError("A11ksa login failed or did not return a usable SSID.")
+        raise ValueError("A11ksa login failed or did not return a usable SSID.")
     client = AsyncQuotexClient(ssid=session["ssid"], is_demo=is_demo, enable_logging=False)
     connected = False
     try:
         connected = await client.connect()
         if not connected:
-            raise RuntimeError("A11ksa WebSocket connection failed.")
+            raise ValueError("A11ksa WebSocket connection failed.")
         if operation == "assets":
             assets = await client.get_assets_and_payouts()
             return [
