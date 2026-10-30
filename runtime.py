@@ -105,7 +105,7 @@ def get_watchlist() -> dict[str, Any]:
     symbols = configured_symbols()
     return {
         "source": data_source_label(),
-        "market_type": "standard forex, not Quotex OTC",
+        "market_type": "Quotex market" if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() in ("quantex", "otcharts", "a11ksa") else "standard forex, not Quotex OTC",
         "symbols": symbols,
         "scanned": snapshots,
         "refresh_interval_seconds": refresh_interval_seconds(),
@@ -215,7 +215,7 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
         error_snapshot = {
             "available": False,
             "source": data_source_label(),
-            "market_type": "standard forex, not Quotex OTC",
+            "market_type": "Quotex market" if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() in ("quantex", "otcharts", "a11ksa") else "standard forex, not Quotex OTC",
             "symbol": selected,
             "watchlist": symbols,
             "updated_at": datetime.now(timezone.utc).isoformat(),
