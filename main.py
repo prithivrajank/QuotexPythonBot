@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
             pass
 
 
-app = FastAPI(title="Standard Forex Data & Signal Bot", version="0.5.0", lifespan=lifespan)
+app = FastAPI(title="Quotex Demo Read-Only Signal Bot", version="0.6.0", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -55,8 +55,8 @@ def assets():
     try:
         return {
             "source": data_source_label(),
-            "market_type": result[0].get("market_type", "provider-specific live/OTC market") if result else "provider-specific live/OTC market",
             "assets": get_assets(),
+            "market_type": "Quotex Demo subscriptions",
         }
     except MarketDataError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from None
@@ -155,11 +155,11 @@ def history(limit: int = Query(50, ge=1, le=200)):
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
-    return """<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Forex Live Chart & Signal History</title><script src='https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js'></script><style>
+    return """<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Quotex Demo Live Data & Signal Bot</title><script src='https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js'></script><style>
 *{box-sizing:border-box}body{font-family:system-ui,-apple-system,sans-serif;max-width:1180px;margin:28px auto;padding:0 16px;background:#10131a;color:#f3f4f6}section{background:#1c2230;border-radius:14px;padding:20px;margin:14px 0;overflow:hidden}small,.muted{color:#b6c0d1}.warn{color:#ffcc80}.signal{font-size:1.5rem;font-weight:750}button{background:#7c9cff;color:#10131a;border:0;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer}button:disabled{opacity:.55}table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:.88rem}th,td{text-align:right;padding:8px;border-bottom:1px solid #3a4355;white-space:nowrap}th:first-child,td:first-child{text-align:left}.tablewrap{overflow-x:auto}.chart{height:340px;width:100%}.macdchart{height:170px;width:100%}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}.metric{background:#121722;border-radius:10px;padding:12px}.metric strong{display:block;font-size:1.05rem;margin-top:4px}.pill{display:inline-block;background:#303b52;padding:4px 8px;border-radius:999px;font-size:.8rem}.history-good{color:#73d6ae}.history-bad{color:#ff8c8c}@media(max-width:600px){.chart{height:290px}section{padding:14px}}
 </style></head><body>
-<h1>Forex Live Data &amp; Signal Bot</h1><p>1-minute candles · Chart time: IST · 1m/2m expiry hint · Read-only signals · No automatic trades</p>
-<section><h2>Data provider</h2><p id='providerInfo'>Selected market-data provider and market type will be shown here after the provider status check.</p><small>Chart candles and indicators are calculated from the selected provider's data. Candle polling updates only when provider data is returned; it is not a guarantee of profitable signals.</small></section>
+<h1>Quotex Demo Live Data &amp; Signal Bot</h1><p>1-minute candles · Chart time: IST · 1m/2m expiry hint · Read-only signals · No automatic trades</p>
+<section><h2>Data provider</h2><p id='providerInfo'>ChipaDevTeam QuotexAPI · Quotex Demo</p><small>Data is read from your Quotex Demo session through the unofficial ChipaDevTeam QuotexAPI library. Only verified OHLC events are analyzed; no orders are placed.</small></section>
 <section><h2>Connection &amp; schedule</h2><p id='botStatus' class='pill'>Bot status: checking…</p><p><button id='botToggle'>Turn bot ON</button></p><p class='muted'>OFF pauses automatic provider refreshes. Manual refresh still uses an API request.</p><p id='status'>Checking API key…</p><p id='updated' class='muted'>Waiting for first scheduled refresh…</p><p id='telegram' class='muted'>Telegram setup status will appear after refresh.</p><label for='assetSelect'>Watchlist pair</label> <select id='assetSelect' style='margin:8px;background:#121722;color:#f3f4f6;border:1px solid #46516a;border-radius:8px;padding:8px'><option>Loading watchlist…</option></select><p id='watchlistInfo' class='muted'>One symbol is scanned per interval to protect the free API quota.</p><span class='pill'>Scheduled refresh: minimum 5 minutes</span></section>
 <section><h2>Signal summary</h2><p id='signal' class='signal'>WAIT · Waiting for data</p><p id='reason' class='muted'>Waiting for first scheduled refresh.</p><p id='expiry' class='pill'>Expiry suggestion: waiting for data</p><p id='candleWindow' class='muted'>Candle status: waiting for data</p><div class='grid'><div class='metric'>RSI (14)<strong id='rsi'>—</strong></div><div class='metric'>MACD histogram<strong id='macd'>—</strong></div><div class='metric'>Bollinger upper<strong id='bbupper'>—</strong></div><div class='metric'>Bollinger middle<strong id='bbmiddle'>—</strong></div><div class='metric'>Bollinger lower<strong id='bblower'>—</strong></div><div class='metric'>Support / resistance (20)<strong id='sr'>—</strong></div></div><p style='margin-top:14px'><button id='refresh'>Refresh selected pair (uses 1 request)</button></p><p class='warn'>CALL / PUT / WAIT are heuristic labels, not validated predictions, financial advice, or guarantees.</p></section>
 <section><h2>Live candlestick chart</h2><p class='muted'>Selected pair · 1-minute · Chart times shown in India Standard Time (IST). Candles with EMA(9), EMA(21), Bollinger Bands; MACD below. Data source follows MARKET_DATA_PROVIDER.</p><div id='priceChart' class='chart'></div><h3>MACD (12, 26, 9)</h3><div id='macdChart' class='macdchart'></div></section>
