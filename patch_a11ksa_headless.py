@@ -6,12 +6,26 @@ dependencies fail visibly before the web service starts.
 """
 from pathlib import Path
 import asyncio
+import re
+import sys
 
 import api_quotex.login as login
 from playwright.async_api import async_playwright
 
+# Forward sanitized login progress/errors to Render runtime logs.
+login.logger.add(sys.stdout, level="INFO", format="{time:YYYY-MM-DD HH:mm:ss} | A11ksa | {level} | {message}")
+
 path = Path(login.__file__)
 source = path.read_text(encoding="utf-8")
+
+# Playwright URL patterns are globs or regexes; parentheses in the old glob
+# were treated literally and could never match the intended redirect.
+old_wait = 'page.wait_for_url("**/(trade|demo-trade|cabinet)**", timeout=60_000)'
+new_wait = 'page.wait_for_url(re.compile(r".*/(?:trade|demo-trade|cabinet)(?:/.*)?$"), timeout=60_000)'
+if old_wait in source:
+    source = source.replace(old_wait, new_wait, 1)
+elif new_wait not in source:
+    raise SystemExit("A11ksa patch failed: expected login redirect wait was not found.")
 
 if "headless=False" in source:
     source = source.replace("headless=False", "headless=True")
