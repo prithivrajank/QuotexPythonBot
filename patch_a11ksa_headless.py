@@ -15,13 +15,13 @@ from playwright.async_api import async_playwright
 path = Path(login.__file__)
 source = path.read_text(encoding="utf-8")
 
-# Persist an stdout logger sink in the installed package so login diagnostics
-# appear in Render runtime logs (the build process is separate from Uvicorn).
-if anchor not in source:
-    if persistent not in source:
-        raise SystemExit("A11ksa patch failed: logger setup anchor not found.")
-else:
+# Persist login diagnostics to stdout so they appear in Render runtime logs.
+anchor = 'logger.add(log_filename, level="INFO", encoding="utf-8", backtrace=True, diagnose=True)\\n'
+persistent = anchor + 'logger.add(lambda message: print(message, end=""), level="INFO")\\n'
+if anchor in source:
     source = source.replace(anchor, persistent, 1)
+elif 'logger.add(lambda message: print(message, end=""), level="INFO")' not in source:
+    raise SystemExit("A11ksa patch failed: logger setup anchor not found.")
 
 # Playwright URL patterns are globs or regexes; parentheses in the old glob
 # were treated literally and could never match the intended redirect.
