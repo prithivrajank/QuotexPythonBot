@@ -1,26 +1,57 @@
-"""Patch the upstream A11ksa login browser for headless cloud hosting.
+"""Make the pinned A11ksa Playwright login usable on a headless Render worker.
 
-The upstream package launches Chromium with headless=False, which requires a
-display server and causes BrowserType.launch to close on a headless Render
-service. Keep this patch narrow and fail the build if the expected code changes.
+This patches only the upstream browser launch options, then performs a real
+Chromium launch smoke test during the Render build so missing browser/runtime
+dependencies fail visibly before the web service starts.
 """
 from pathlib import Path
+import asyncio
+
 import api_quotex.login as login
+from playwright.async_api import async_playwright
 
 path = Path(login.__file__)
 source = path.read_text(encoding="utf-8")
-old = "headless=False"
-new = "headless=True"
 
-if new in source and old not in source:
-    print(f"A11ksa login already uses headless Chromium: {path}")
-elif old in source:
-    patched = source.replace(old, new)
-    if patched == source:
-        raise SystemExit("A11ksa headless patch made no change.")
-    path.write_text(patched, encoding="utf-8")
-    print(f"Patched A11ksa login to use headless Chromium: {path}")
+if "headless=False" in source:
+    source = source.replace("headless=False", "headless=True")
+elif "headless=True" not in source:
+    raise SystemExit("A11ksa patch failed: expected headless browser option not found.")
+
+marker = 'args=[\n                "--disable-blink-features=AutomationControlled",'
+patched_marker = '''args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-extensions",
+                "--disable-background-networking",
+                "--disable-blink-features=AutomationControlled",'''
+
+if marker in source:
+    source = source.replace(marker, patched_marker, 1)
+elif all(flag in source for flag in (
+    "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"
+)):
+    pass
 else:
-    raise SystemExit(
-        "Could not safely patch A11ksa login: expected headless=False was not found."
-    )
+    raise SystemExit("A11ksa patch failed: browser launch args did not match the pinned source.")
+
+path.write_text(source, encoding="utf-8")
+print(f"Patched A11ksa login for headless Chromium: {path}")
+
+async def smoke_test():
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-extensions",
+                "--disable-background-networking",
+            ],
+        )
+        await browser.close()
+
+asyncio.run(smoke_test())
+print("Playwright Chromium launch smoke test: OK")
