@@ -10,7 +10,11 @@ services:
       - key: PYTHON_VERSION
         value: 3.11.11
       - key: MARKET_DATA_PROVIDER
-        value: "otcharts"
+        value: "a11ksa"
+      - key: QUOTEX_EMAIL
+        sync: false
+      - key: QUOTEX_PASSWORD
+        sync: false
       - key: TWELVE_DATA_API_KEY
         sync: false
       - key: QUANTEX_API_KEY
