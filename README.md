@@ -52,10 +52,12 @@ CALL/PUT/WAIT labels, indicator summaries, and expiry suggestions are heuristic 
 Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in Render Environment. Do not store credentials in source code. With OTCharts' free tier, automatic polling is disabled, so the bot cannot provide continuous scheduled Telegram signals on that tier.
 
 
-## A11ksa Quotex data provider (read-only)
+## ChipaDevTeam QuotexAPI Demo connection (read-only)
 
-This branch adds the unofficial A11ksa API-Quotex client as an optional market-data provider. Set `MARKET_DATA_PROVIDER=a11ksa` to use it. On Render, set `QUOTEX_EMAIL` and `QUOTEX_PASSWORD` as secret environment variables and choose `QUOTEX_DEMO=true` for demo access. Never commit credentials, SSID values, `config.json`, or session files.
+The selected integration uses the unofficial [ChipaDevTeam QuotexAPI](https://github.com/ChipaDevTeam/QuotexAPI) Python library. Set `MARKET_DATA_PROVIDER=quotexapi` and provide `QUOTEX_SSID` in Render Environment. Use an SSID from a logged-in **Quotex Demo** browser session; do not paste it into GitHub, this chat, a URL, or frontend code. Keep `QUOTEX_IS_DEMO=true`.
 
-The adapter only calls asset-list and candle-history methods. It does not place, modify, or close orders. A11ksa is an unofficial third-party project and may break when Quotex changes its service; it is not affiliated with or endorsed by Quotex. Use only where permitted by the broker's terms and applicable law.
+The adapter is intentionally read-only: it connects, authenticates the Demo session, subscribes to configured candle/depth events, and accepts only payloads containing valid OHLC values. It does not call any order placement, cancellation, or account-switching methods.
 
-Signals are heuristic research outputs, not guaranteed next-candle predictions. Measure results with timestamp-safe backtests and forward-testing before relying on them. A displayed confidence score, if enabled, must not be interpreted as a calibrated probability unless it has been validated on out-of-sample data.
+**Important limitations:** this is an unofficial community library, not an official Quotex API. Its README marks some features as placeholders/mock implementations, and its candle event payloads must be verified against the live broker session before treating them as working market data. A successful WebSocket/authentication response alone does not prove that real candles are arriving. The dashboard should remain in WAIT until enough valid OHLC bars are received. Use only where permitted by Quotex's terms and applicable law.
+
+The library may change or stop working when Quotex changes its service. Signals remain heuristic research outputs, not guaranteed next-candle predictions. Validate with timestamp-safe backtests and forward-testing; confidence scores are not calibrated probabilities unless tested on out-of-sample data.
