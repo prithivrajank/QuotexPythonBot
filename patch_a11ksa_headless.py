@@ -7,16 +7,21 @@ dependencies fail visibly before the web service starts.
 from pathlib import Path
 import asyncio
 import re
-import sys
 
 import api_quotex.login as login
 from playwright.async_api import async_playwright
 
-# Forward sanitized login progress/errors to Render runtime logs.
-login.logger.add(sys.stdout, level="INFO", format="{time:YYYY-MM-DD HH:mm:ss} | A11ksa | {level} | {message}")
 
 path = Path(login.__file__)
 source = path.read_text(encoding="utf-8")
+
+# Persist an stdout logger sink in the installed package so login diagnostics
+# appear in Render runtime logs (the build process is separate from Uvicorn).
+if anchor not in source:
+    if persistent not in source:
+        raise SystemExit("A11ksa patch failed: logger setup anchor not found.")
+else:
+    source = source.replace(anchor, persistent, 1)
 
 # Playwright URL patterns are globs or regexes; parentheses in the old glob
 # were treated literally and could never match the intended redirect.
