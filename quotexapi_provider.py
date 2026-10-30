@@ -4,7 +4,7 @@ Uses a user-supplied browser SSID. It never calls any order/trading methods.
 Only explicit OHLC events are accepted; no candles are fabricated.
 """
 from __future__ import annotations
-import asyncio, os, re, time
+import asyncio, os, re
 from collections import defaultdict
 from typing import Any
 
@@ -15,7 +15,6 @@ _connected = False
 _error = "Quotex Demo SSID is not configured."
 _events = 0
 _rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
-_callbacks = []
 _seen: set[tuple[str, int]] = set()
 
 
@@ -92,14 +91,10 @@ async def _start() -> None:
     api=QuotexAPI(ssid=_get_ssid(),is_demo=True,log_level="INFO")
     await api.connect()
     await api.login_with_ssid(_get_ssid(),is_demo=True)
-    # Upstream DataService routes "depth" events to callbacks that require
-    # a payload with an asset key. Attach to the router after initialization.
-    await api.data.initialize()
-    api.connection.subscribe("depth",_on_event)
-    api.connection.subscribe("tick",_on_event)
-    api.connection.subscribe("candles",_on_event)
-    api.connection.subscribe("candle",_on_event)
+    # Register through the library's documented DataService callback API.
+    # DataService.initialize() is already called by api.connect().
     for symbol in _symbols():
+        api.data.on_candle(symbol, _on_event)
         await api.data.subscribe_candles(symbol, timeframe=60)
     _api=api; _connected=True
     _error="Quotex Demo SSID authenticated; waiting for validated candle events."
