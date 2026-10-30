@@ -92,14 +92,15 @@ async def _start() -> None:
     api=QuotexAPI(ssid=_get_ssid(),is_demo=True,log_level="INFO")
     await api.connect()
     await api.login_with_ssid(_get_ssid(),is_demo=True)
-    # Attach handlers directly to the package's Socket.IO event router.
+    # Upstream DataService routes "depth" events to callbacks that require
+    # a payload with an asset key. Attach to the router after initialization.
+    await api.data.initialize()
     api.connection.subscribe("depth",_on_event)
     api.connection.subscribe("tick",_on_event)
     api.connection.subscribe("candles",_on_event)
     api.connection.subscribe("candle",_on_event)
-    await api.data.subscribe_candles(_symbols()[0],timeframe=60)
-    for symbol in _symbols()[1:]:
-        await api.data.subscribe_candles(symbol,timeframe=60)
+    for symbol in _symbols():
+        await api.data.subscribe_candles(symbol, timeframe=60)
     _api=api; _connected=True
     _error="Quotex Demo SSID authenticated; waiting for validated candle events."
 
