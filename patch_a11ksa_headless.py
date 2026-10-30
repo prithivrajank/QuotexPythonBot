@@ -15,13 +15,14 @@ from playwright.async_api import async_playwright
 path = Path(login.__file__)
 source = path.read_text(encoding="utf-8")
 
-# Persist login diagnostics to stdout so they appear in Render runtime logs.
-anchor = 'logger.add(log_filename, level="INFO", encoding="utf-8", backtrace=True, diagnose=True)\\n'
-persistent = anchor + 'logger.add(lambda message: print(message, end=""), level="INFO")\\n'
-if anchor in source:
-    source = source.replace(anchor, persistent, 1)
-elif 'logger.add(lambda message: print(message, end=""), level="INFO")' not in source:
-    raise SystemExit("A11ksa patch failed: logger setup anchor not found.")
+# Add a stdout sink next to A11ksa's existing file logger. Use the stable
+# logger.remove() line rather than matching a version-sensitive file path.
+stdout_sink = 'logger.add(lambda message: print(message, end=""), level="INFO")'
+if stdout_sink not in source:
+    logger_reset = "logger.remove()"
+    if logger_reset not in source:
+        raise SystemExit("A11ksa patch failed: logger initialization not found.")
+    source = source.replace(logger_reset, logger_reset + "\\n" + stdout_sink, 1)
 
 # Playwright URL patterns are globs or regexes; parentheses in the old glob
 # were treated literally and could never match the intended redirect.
