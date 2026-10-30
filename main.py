@@ -55,7 +55,7 @@ def assets():
     try:
         return {
             "source": data_source_label(),
-            "market_type": "provider-specific live/OTC market",
+            "market_type": result[0].get("market_type", "provider-specific live/OTC market") if result else "provider-specific live/OTC market",
             "assets": get_assets(),
         }
     except MarketDataError as exc:
@@ -78,7 +78,7 @@ def candles(
         result = get_candles(asset, timeframe_seconds, limit)
         return {
             "source": data_source_label(),
-            "market_type": "standard forex, not Quotex OTC",
+            "market_type": result[-1].get("market_type", "provider-specific market") if result else "provider-specific market",
             "symbol": asset,
             "timeframe_seconds": timeframe_seconds,
             "count": len(result),
@@ -103,7 +103,7 @@ def analysis(
         summary = analyze_candles(result)
         return {
             "source": data_source_label(),
-            "market_type": "standard forex, not Quotex OTC",
+            "market_type": result[-1].get("market_type", "provider-specific market") if result else "provider-specific market",
             "symbol": asset,
             "timeframe_seconds": timeframe_seconds,
             "count": len(result),

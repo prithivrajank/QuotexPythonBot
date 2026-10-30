@@ -50,3 +50,12 @@ CALL/PUT/WAIT labels, indicator summaries, and expiry suggestions are heuristic 
 ## Optional Telegram alerts
 
 Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in Render Environment. Do not store credentials in source code. With OTCharts' free tier, automatic polling is disabled, so the bot cannot provide continuous scheduled Telegram signals on that tier.
+
+
+## A11ksa Quotex data provider (read-only)
+
+This branch adds the unofficial A11ksa API-Quotex client as an optional market-data provider. Set `MARKET_DATA_PROVIDER=a11ksa` to use it. On Render, set `QUOTEX_EMAIL` and `QUOTEX_PASSWORD` as secret environment variables and choose `QUOTEX_DEMO=true` for demo access. Never commit credentials, SSID values, `config.json`, or session files.
+
+The adapter only calls asset-list and candle-history methods. It does not place, modify, or close orders. A11ksa is an unofficial third-party project and may break when Quotex changes its service; it is not affiliated with or endorsed by Quotex. Use only where permitted by the broker's terms and applicable law.
+
+Signals are heuristic research outputs, not guaranteed next-candle predictions. Measure results with timestamp-safe backtests and forward-testing before relying on them. A displayed confidence score, if enabled, must not be interpreted as a calibrated probability unless it has been validated on out-of-sample data.
