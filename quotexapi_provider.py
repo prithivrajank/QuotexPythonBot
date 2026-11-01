@@ -141,8 +141,10 @@ def _ensure_connection() -> Future | None:
     return _startup_future
 
 
-def connection_status() -> dict[str,Any]:
-    if not _connected:
+def connection_status(start: bool = False) -> dict[str,Any]:
+    # Dashboard status polling must be passive; do not open a broker connection
+    # while the user has the bot OFF. Explicit candle refresh starts it instead.
+    if start and not _connected:
         _ensure_connection()
     has_rows = any(_rows.values())
     return {
