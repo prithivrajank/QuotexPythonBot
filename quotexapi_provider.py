@@ -4,7 +4,7 @@ Uses a user-supplied browser SSID. It never calls any order/trading methods.
 Only explicit OHLC events are accepted; no candles are fabricated.
 """
 from __future__ import annotations
-import asyncio, os, re, threading
+import asyncio, os, re, threading, time
 from collections import defaultdict
 from concurrent.futures import Future, TimeoutError as FutureTimeout
 from typing import Any
@@ -20,6 +20,9 @@ _seen: set[tuple[str, int]] = set()
 _loop_thread: threading.Thread | None = None
 _loop_ready = threading.Event()
 _startup_future: Future | None = None
+_RETRY_COOLDOWN_SECONDS = max(60, int(os.getenv("QUOTEX_RETRY_COOLDOWN_SECONDS", "300")))
+_retry_after = 0.0
+_connection_lock = threading.Lock()
 
 
 def _get_ssid() -> str:
@@ -114,32 +117,45 @@ def _loop_worker() -> None:
 
 
 def _ensure_connection() -> Future | None:
-    """Start one persistent asyncio loop and one provider connection."""
-    global _loop_thread, _startup_future, _error
-    if _connected:
-        return _startup_future
-    if _loop_thread is None or not _loop_thread.is_alive():
-        _loop_ready.clear()
-        _loop_thread = threading.Thread(
-            target=_loop_worker, name="quotex-websocket-loop", daemon=True
-        )
-        _loop_thread.start()
-    if not _loop_ready.wait(timeout=5) or _loop is None:
-        _error = "Timed out starting the Quotex WebSocket event loop."
-        return None
-    if _startup_future is None or _startup_future.done():
+    """Start one persistent loop; back off after failed handshakes."""
+    global _loop_thread, _startup_future, _error, _retry_after
+    with _connection_lock:
+        if _connected:
+            return _startup_future
+
+        # Reuse a failed result during the cooldown rather than retrying a 429.
+        if _startup_future is not None and _startup_future.done():
+            if time.monotonic() < _retry_after:
+                return _startup_future
+            _startup_future = None
+        if _startup_future is not None:
+            return _startup_future
+
+        if _loop_thread is None or not _loop_thread.is_alive():
+            _loop_ready.clear()
+            _loop_thread = threading.Thread(
+                target=_loop_worker, name="quotex-websocket-loop", daemon=True
+            )
+            _loop_thread.start()
+        if not _loop_ready.wait(timeout=5) or _loop is None:
+            _error = "Timed out starting the Quotex WebSocket event loop."
+            _retry_after = time.monotonic() + _RETRY_COOLDOWN_SECONDS
+            return None
+
+        _error = "Connecting to Quotex Demo..."
         _startup_future = asyncio.run_coroutine_threadsafe(_start(), _loop)
 
         def _record_start_error(future: Future) -> None:
-            global _error
+            global _error, _retry_after
             try:
                 future.result()
+                _retry_after = 0.0
             except Exception as exc:
                 _error = f"QuotexAPI connection failed: {type(exc).__name__}: {str(exc)[:200]}"
+                _retry_after = time.monotonic() + _RETRY_COOLDOWN_SECONDS
 
         _startup_future.add_done_callback(_record_start_error)
-    return _startup_future
-
+        return _startup_future
 
 def connection_status(start: bool = False) -> dict[str,Any]:
     # Dashboard status polling must be passive; do not open a broker connection
@@ -155,9 +171,10 @@ def connection_status(start: bool = False) -> dict[str,Any]:
             "Authenticated; verified OHLC events are arriving."
             if has_rows else
             ("Authenticated; waiting for validated candle events." if _connected else
-             ("Demo SSID is configured; connection has not been attempted while the bot is OFF."
-              if os.getenv("QUOTEX_SSID", "").strip() else
-              "Quotex Demo SSID is not configured."))
+             (_error if _error and _error != "Quotex Demo SSID is not configured." else
+              ("Demo SSID is configured; connection has not been attempted while the bot is OFF."
+               if os.getenv("QUOTEX_SSID", "").strip() else
+               "Quotex Demo SSID is not configured.")))
         ),
         "source": SOURCE,
         "market_type": "Quotex Demo",
@@ -193,7 +210,7 @@ def get_candles(asset: str,timeframe_seconds: int,limit: int=100) -> list[dict[s
 
 
 def shutdown() -> None:
-    global _api, _connected, _startup_future, _loop_thread, _loop
+    global _api, _connected, _startup_future, _loop_thread, _loop, _retry_after
     if _api is not None and _loop is not None and _loop.is_running():
         future = asyncio.run_coroutine_threadsafe(_api.disconnect(), _loop)
         try:
@@ -205,5 +222,6 @@ def shutdown() -> None:
     _api = None
     _connected = False
     _startup_future = None
+    _retry_after = 0.0
     _loop_thread = None
     _loop = None
