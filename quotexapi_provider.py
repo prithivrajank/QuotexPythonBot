@@ -4,8 +4,9 @@ Uses a user-supplied browser SSID. It never calls any order/trading methods.
 Only explicit OHLC events are accepted; no candles are fabricated.
 """
 from __future__ import annotations
-import asyncio, os, re
+import asyncio, os, re, threading
 from collections import defaultdict
+from concurrent.futures import Future, TimeoutError as FutureTimeout
 from typing import Any
 
 SOURCE = "ChipaDevTeam QuotexAPI WebSocket (unofficial)"
@@ -16,6 +17,9 @@ _error = "Quotex Demo SSID is not configured."
 _events = 0
 _rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
 _seen: set[tuple[str, int]] = set()
+_loop_thread: threading.Thread | None = None
+_loop_ready = threading.Event()
+_startup_future: Future | None = None
 
 
 def _get_ssid() -> str:
@@ -100,25 +104,62 @@ async def _start() -> None:
     _error="Quotex Demo SSID authenticated; waiting for validated candle events."
 
 
-def connection_status() -> dict[str,Any]:
-    global _error
-    if not _connected:
-        try:
-            asyncio.get_running_loop()
-            return {"connected":False,"live_data":False,"credentials_configured":bool(os.getenv("QUOTEX_SSID")),
-                    "message":_error,"source":SOURCE,"market_type":"Quotex Demo","read_only":True}
-        except RuntimeError:
-            async def run():
-                global _error
-                try: await _start()
-                except Exception as exc: _error=f"QuotexAPI connection failed: {type(exc).__name__}: {str(exc)[:200]}"
-            asyncio.run(run())
-    return {"connected":_connected,"live_data":any(_rows.values()),
-            "credentials_configured":bool(os.getenv("QUOTEX_SSID")),
-            "message":("Authenticated; verified OHLC events are arriving." if any(_rows.values()) else _error),
-            "source":SOURCE,"market_type":"Quotex Demo","events_received":_events,
-            "read_only":True,"affiliation":"Unofficial community API; not operated by Quotex."}
+def _loop_worker() -> None:
+    global _loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    _loop = loop
+    _loop_ready.set()
+    loop.run_forever()
 
+
+def _ensure_connection() -> Future | None:
+    """Start one persistent asyncio loop and one provider connection."""
+    global _loop_thread, _startup_future, _error
+    if _connected:
+        return _startup_future
+    if _loop_thread is None or not _loop_thread.is_alive():
+        _loop_ready.clear()
+        _loop_thread = threading.Thread(
+            target=_loop_worker, name="quotex-websocket-loop", daemon=True
+        )
+        _loop_thread.start()
+    if not _loop_ready.wait(timeout=5) or _loop is None:
+        _error = "Timed out starting the Quotex WebSocket event loop."
+        return None
+    if _startup_future is None or _startup_future.done():
+        _startup_future = asyncio.run_coroutine_threadsafe(_start(), _loop)
+
+        def _record_start_error(future: Future) -> None:
+            global _error
+            try:
+                future.result()
+            except Exception as exc:
+                _error = f"QuotexAPI connection failed: {type(exc).__name__}: {str(exc)[:200]}"
+
+        _startup_future.add_done_callback(_record_start_error)
+    return _startup_future
+
+
+def connection_status() -> dict[str,Any]:
+    if not _connected:
+        _ensure_connection()
+    has_rows = any(_rows.values())
+    return {
+        "connected": _connected,
+        "live_data": has_rows,
+        "credentials_configured": bool(os.getenv("QUOTEX_SSID")),
+        "message": (
+            "Authenticated; verified OHLC events are arriving."
+            if has_rows else
+            ("Authenticated; waiting for validated candle events." if _connected else _error)
+        ),
+        "source": SOURCE,
+        "market_type": "Quotex Demo",
+        "events_received": _events,
+        "read_only": True,
+        "affiliation": "Unofficial community API; not operated by Quotex.",
+    }
 
 def get_assets() -> list[dict[str,Any]]:
     # The upstream get_assets() implementation currently returns mock items.
@@ -132,7 +173,14 @@ def get_candles(asset: str,timeframe_seconds: int,limit: int=100) -> list[dict[s
     symbol=asset.strip().replace("/","").replace("-","").upper()
     if not symbol.endswith("_OTC"): symbol+="_otc"
     if not _connected:
-        connection_status()
+        future = _ensure_connection()
+        if future is not None:
+            try:
+                future.result(timeout=20)
+            except FutureTimeout:
+                raise RuntimeError("Timed out waiting for the Quotex Demo WebSocket connection.")
+            except Exception as exc:
+                raise RuntimeError(f"Quotex Demo connection failed: {type(exc).__name__}: {str(exc)[:160]}") from exc
     rows=list(_rows.get(symbol,[]))
     if len(rows)<30:
         raise RuntimeError(f"No verified OHLC stream yet for {symbol}; received {len(rows)} candle bars.")
@@ -140,7 +188,17 @@ def get_candles(asset: str,timeframe_seconds: int,limit: int=100) -> list[dict[s
 
 
 def shutdown() -> None:
-    global _api,_connected
+    global _api, _connected, _startup_future, _loop_thread, _loop
     if _api is not None and _loop is not None and _loop.is_running():
-        asyncio.run_coroutine_threadsafe(_api.disconnect(),_loop)
-    _api=None; _connected=False
+        future = asyncio.run_coroutine_threadsafe(_api.disconnect(), _loop)
+        try:
+            future.result(timeout=5)
+        except Exception:
+            pass
+    if _loop is not None and _loop.is_running():
+        _loop.call_soon_threadsafe(_loop.stop)
+    _api = None
+    _connected = False
+    _startup_future = None
+    _loop_thread = None
+    _loop = None
