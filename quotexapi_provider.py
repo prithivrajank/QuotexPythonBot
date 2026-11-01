@@ -154,7 +154,10 @@ def connection_status(start: bool = False) -> dict[str,Any]:
         "message": (
             "Authenticated; verified OHLC events are arriving."
             if has_rows else
-            ("Authenticated; waiting for validated candle events." if _connected else _error)
+            ("Authenticated; waiting for validated candle events." if _connected else
+             ("Demo SSID is configured; connection has not been attempted while the bot is OFF."
+              if os.getenv("QUOTEX_SSID", "").strip() else
+              "Quotex Demo SSID is not configured."))
         ),
         "source": SOURCE,
         "market_type": "Quotex Demo",
