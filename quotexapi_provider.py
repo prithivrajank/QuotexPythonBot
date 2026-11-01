@@ -90,7 +90,7 @@ async def _start() -> None:
     _loop=asyncio.get_running_loop()
     api=QuotexAPI(ssid=_get_ssid(),is_demo=True,log_level="INFO")
     await api.connect()
-    await api.login_with_ssid(_get_ssid(),is_demo=True)
+    await api.login_with_ssid(_get_ssid())
     # Register through the library's documented DataService callback API.
     # DataService.initialize() is already called by api.connect().
     for symbol in _symbols():
