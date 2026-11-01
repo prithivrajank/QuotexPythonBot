@@ -138,6 +138,12 @@ async def refresh(asset: str | None = Query(None, min_length=3, max_length=40)):
         result = await asyncio.to_thread(refresh_snapshot, asset)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+    except MarketDataError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+    except RuntimeError as exc:
+        # Provider connection / candle-stream failures are expected operational
+        # errors; return a useful 502 instead of an opaque HTTP 500 traceback.
+        raise HTTPException(status_code=502, detail=str(exc)[:300]) from None
     if not result.get("available"):
         raise HTTPException(status_code=502, detail=result.get("message", "Market refresh failed"))
     return result
