@@ -1,7 +1,7 @@
 """Read-only Quotex adapter for ChipaDevTeam/QuotexAPI.
 
 Uses a user-supplied browser SSID. It never calls any order/trading methods.
-Only explicit OHLC events are accepted; no candles are fabricated.
+Only explicit quote and OHLC events are accepted; no prices or candles are fabricated.
 """
 from __future__ import annotations
 import asyncio, os, re, threading, time
@@ -16,6 +16,7 @@ _connected = False
 _error = "Quotex SSID is not configured."
 _events = 0
 _rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
+_ticks: dict[str, dict[str, Any]] = {}
 _seen: set[tuple[str, int]] = set()
 _loop_thread: threading.Thread | None = None
 _loop_ready = threading.Event()
@@ -85,6 +86,38 @@ def _candle_from_payload(data: Any, symbol: str) -> dict[str, Any] | None:
     return None
 
 
+def _on_quote(data: Any) -> None:
+    """Store only explicit, symbol-labelled quote/tick events."""
+    if not isinstance(data, dict):
+        return
+    asset = str(data.get("asset", data.get("symbol", ""))).strip().lower()
+    if not asset:
+        return
+    price_value = data.get("price", data.get("quote", data.get("close")))
+    try:
+        price = float(price_value)
+        timestamp = float(data.get("time", data.get("timestamp", time.time())))
+    except (TypeError, ValueError):
+        return
+    if timestamp > 10_000_000_000:
+        timestamp /= 1000
+    if not (price > 0 and timestamp > 0):
+        return
+    for symbol in _symbols():
+        if asset == symbol.lower():
+            _ticks[symbol] = {
+                "symbol": symbol, "price": price, "time": timestamp,
+                "market_type": "Quotex OTC" if symbol.lower().endswith("_otc") else "Quotex live forex",
+                "source": SOURCE,
+            }
+            return
+
+
+def get_ticks() -> list[dict[str, Any]]:
+    """Return latest observed ticks; this is a snapshot, not a fabricated stream."""
+    return [dict(_ticks[s]) for s in _symbols() if s in _ticks]
+
+
 def _on_event(data: Any) -> None:
     global _events
     _events += 1
@@ -123,6 +156,8 @@ async def _start() -> None:
     for symbol in _symbols():
         api.data.on_candle(symbol, _on_event)
         await api.data.subscribe_candles(symbol, timeframe=60)
+        api.data.on_quote(symbol, _on_quote)
+        await api.data.subscribe_quotes(symbol)
     _api=api; _connected=True
     _error=f"Quotex {account_label} account authenticated; waiting for validated candle events."
 
@@ -200,6 +235,8 @@ def connection_status(start: bool = False) -> dict[str,Any]:
         "market_type": "Quotex OTC + live forex",
         "account_mode": os.getenv("QUOTEX_ACCOUNT", "demo").strip().lower(),
         "events_received": _events,
+        "ticks_received": len(_ticks),
+        "tick_symbols": sorted(_ticks),
         "read_only": True,
         "affiliation": "Unofficial community API; not operated by Quotex.",
     }
@@ -243,6 +280,7 @@ def shutdown() -> None:
         _loop.call_soon_threadsafe(_loop.stop)
     _api = None
     _connected = False
+    _ticks.clear()
     _startup_future = None
     _retry_after = 0.0
     _loop_thread = None
