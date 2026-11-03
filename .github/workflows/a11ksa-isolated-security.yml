@@ -62,3 +62,5 @@ jobs:
 
       - name: Run adapter and TLS patch unit tests
         run: python -m pytest -q tests/test_a11ksa_provider.py tests/test_patch_a11ksa_tls.py
+
+# Security note: this workflow intentionally performs no account login or session-authenticated request.
