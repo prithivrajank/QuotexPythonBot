@@ -1,0 +1,64 @@
+name: A11ksa isolated TLS security test
+
+on:
+  push:
+    branches:
+      - feature/a11ksa-candle-only-test
+    paths:
+      - "patch_a11ksa_tls.py"
+      - "tests/test_patch_a11ksa_tls.py"
+      - "tests/test_a11ksa_provider.py"
+      - "scripts/verify_a11ksa_tls.py"
+      - "requirements-a11ksa-test.txt"
+      - ".github/workflows/a11ksa-isolated-security.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-security-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out isolated test branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install exact reviewed A11ksa revision
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-a11ksa-test.txt
+          python -m pip install pytest
+
+      - name: Apply TLS patch to installed package
+        run: |
+          PACKAGE_FILE="$(python -c 'from importlib.metadata import distribution; print(distribution("api_quotex").locate_file("api_quotex/websocket_client.py"))')"
+          test -f "$PACKAGE_FILE"
+          python patch_a11ksa_tls.py "$PACKAGE_FILE"
+
+      - name: Verify installed TLS configuration
+        run: |
+          PACKAGE_FILE="$(python -c 'from importlib.metadata import distribution; print(distribution("api_quotex").locate_file("api_quotex/websocket_client.py"))')"
+          python - "$PACKAGE_FILE" <<'PY'
+          import pathlib, sys
+          source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+          assert "ssl.create_default_context()" in source
+          assert "ssl_context.check_hostname = True" in source
+          assert "ssl_context.verify_mode = ssl.CERT_REQUIRED" in source
+          assert "ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2" in source
+          assert "ssl_context.verify_mode = ssl.CERT_NONE" not in source
+          assert "ssl_context.check_hostname = False" not in source
+          print("Installed package TLS configuration is verified.")
+          PY
+
+      - name: Verify certificate chain and hostname against Quotex WebSocket host
+        run: python scripts/verify_a11ksa_tls.py
+
+      - name: Run adapter and TLS patch unit tests
+        run: python -m pytest -q tests/test_a11ksa_provider.py tests/test_patch_a11ksa_tls.py
