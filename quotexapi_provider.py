@@ -1,4 +1,4 @@
-"""Read-only Quotex Demo adapter for ChipaDevTeam/QuotexAPI.
+"""Read-only Quotex adapter for ChipaDevTeam/QuotexAPI.
 
 Uses a user-supplied browser SSID. It never calls any order/trading methods.
 Only explicit OHLC events are accepted; no candles are fabricated.
@@ -13,7 +13,7 @@ SOURCE = "ChipaDevTeam QuotexAPI WebSocket (unofficial)"
 _api = None
 _loop: asyncio.AbstractEventLoop | None = None
 _connected = False
-_error = "Quotex Demo SSID is not configured."
+_error = "Quotex SSID is not configured."
 _events = 0
 _rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
 _seen: set[tuple[str, int]] = set()
@@ -38,12 +38,27 @@ def _get_ssid() -> str:
 
 
 def _symbols() -> list[str]:
+    """Preserve market suffix: plain symbols are live forex, *_otc are OTC."""
     out=[]
-    for item in os.getenv("FOREX_SYMBOLS","EURUSD_otc,GBPUSD_otc").split(","):
+    for item in os.getenv("FOREX_SYMBOLS","EURUSD_otc,GBPUSD_otc,EURUSD,GBPUSD").split(","):
         s=item.strip().replace("/","").replace("-","").upper()
-        if s and not s.endswith("_OTC"): s += "_otc"
-        if s: out.append(s)
+        if s.endswith("_OTC"):
+            s=s[:-4]+"_otc"
+        if s and s not in out:
+            out.append(s)
     return out
+
+
+def _account_mode() -> tuple[bool, str]:
+    """One account per Render process; switch using QUOTEX_ACCOUNT and redeploy."""
+    raw=os.getenv("QUOTEX_ACCOUNT", "demo").strip().lower()
+    if raw not in {"demo", "real"}:
+        raise ValueError("QUOTEX_ACCOUNT must be 'demo' or 'real'.")
+    is_demo=raw == "demo"
+    legacy=os.getenv("QUOTEX_IS_DEMO", "").strip().lower()
+    if legacy in {"true","1","yes"}: is_demo=True
+    elif legacy in {"false","0","no"}: is_demo=False
+    return is_demo, ("Demo" if is_demo else "Real")
 
 
 def _candle_from_payload(data: Any, symbol: str) -> dict[str, Any] | None:
@@ -64,8 +79,9 @@ def _candle_from_payload(data: Any, symbol: str) -> dict[str, Any] | None:
             continue
         if ts>10_000_000_000: ts//=1000
         if ts<=0 or h<max(o,lo,c) or lo>min(o,h,c): continue
+        market_type = "Quotex OTC" if symbol.lower().endswith("_otc") else "Quotex live forex"
         return {"time":ts,"open":o,"high":h,"low":lo,"close":c,"symbol":symbol,
-                "timeframe_seconds":60,"venue":"quotexapi","market_type":"Quotex Demo","source":SOURCE}
+                "timeframe_seconds":60,"venue":"quotexapi","market_type":market_type,"source":SOURCE}
     return None
 
 
@@ -75,9 +91,11 @@ def _on_event(data: Any) -> None:
     # Upstream's published depth handler only forwards records with an asset field.
     # Match only configured asset symbols and explicit OHLC records.
     if not isinstance(data,dict): return
-    asset=str(data.get("asset","")).lower()
+    asset=str(data.get("asset", data.get("symbol", ""))).strip().lower()
+    # Never guess which configured instrument an unlabelled event belongs to.
+    if not asset: return
     for symbol in _symbols():
-        if asset and asset != symbol.lower(): continue
+        if asset != symbol.lower(): continue
         candle=_candle_from_payload(data,symbol)
         if candle:
             key=(symbol,candle["time"])
@@ -95,16 +113,18 @@ async def _start() -> None:
     if _connected: return
     from QuotexAPI import QuotexAPI
     _loop=asyncio.get_running_loop()
-    api=QuotexAPI(ssid=_get_ssid(),is_demo=True,log_level="INFO")
+    is_demo, account_label = _account_mode()
+    ssid = _get_ssid()
+    api=QuotexAPI(ssid=ssid,is_demo=is_demo,log_level="INFO")
     await api.connect()
-    await api.login_with_ssid(_get_ssid())
+    await api.login_with_ssid(ssid)
     # Register through the library's documented DataService callback API.
     # DataService.initialize() is already called by api.connect().
     for symbol in _symbols():
         api.data.on_candle(symbol, _on_event)
         await api.data.subscribe_candles(symbol, timeframe=60)
     _api=api; _connected=True
-    _error="Quotex Demo SSID authenticated; waiting for validated candle events."
+    _error=f"Quotex {account_label} account authenticated; waiting for validated candle events."
 
 
 def _loop_worker() -> None:
@@ -142,7 +162,7 @@ def _ensure_connection() -> Future | None:
             _retry_after = time.monotonic() + _RETRY_COOLDOWN_SECONDS
             return None
 
-        _error = "Connecting to Quotex Demo..."
+        _error = f"Connecting to Quotex {_account_mode()[1]} account..."
         _startup_future = asyncio.run_coroutine_threadsafe(_start(), _loop)
 
         def _record_start_error(future: Future) -> None:
@@ -172,12 +192,13 @@ def connection_status(start: bool = False) -> dict[str,Any]:
             if has_rows else
             ("Authenticated; waiting for validated candle events." if _connected else
              (_error if _error and _error != "Quotex Demo SSID is not configured." else
-              ("Demo SSID is configured; connection has not been attempted while the bot is OFF."
+              ("Quotex SSID is configured; connection has not been attempted while the bot is OFF."
                if os.getenv("QUOTEX_SSID", "").strip() else
-               "Quotex Demo SSID is not configured.")))
+               "Quotex SSID is not configured.")))
         ),
         "source": SOURCE,
-        "market_type": "Quotex Demo",
+        "market_type": "Quotex OTC + live forex",
+        "account_mode": os.getenv("QUOTEX_ACCOUNT", "demo").strip().lower(),
         "events_received": _events,
         "read_only": True,
         "affiliation": "Unofficial community API; not operated by Quotex.",
@@ -186,23 +207,24 @@ def connection_status(start: bool = False) -> dict[str,Any]:
 def get_assets() -> list[dict[str,Any]]:
     # The upstream get_assets() implementation currently returns mock items.
     # Do not represent those as verified broker catalogue data.
-    return [{"symbol":s,"name":s,"market_type":"Quotex Demo subscription","source":SOURCE} for s in _symbols()]
+    return [{"symbol":s,"name":s,"market_type":"Quotex OTC" if s.lower().endswith("_otc") else "Quotex live forex","source":SOURCE} for s in _symbols()]
 
 
 def get_candles(asset: str,timeframe_seconds: int,limit: int=100) -> list[dict[str,Any]]:
     if timeframe_seconds!=60:
         raise ValueError("ChipaDevTeam integration currently supports only 60-second subscriptions.")
     symbol=asset.strip().replace("/","").replace("-","").upper()
-    if not symbol.endswith("_OTC"): symbol+="_otc"
+    if symbol.endswith("_OTC"):
+        symbol=symbol[:-4]+"_otc"
     if not _connected:
         future = _ensure_connection()
         if future is not None:
             try:
                 future.result(timeout=20)
             except FutureTimeout:
-                raise RuntimeError("Timed out waiting for the Quotex Demo WebSocket connection.")
+                raise RuntimeError("Timed out waiting for the Quotex WebSocket connection.")
             except Exception as exc:
-                raise RuntimeError(f"Quotex Demo connection failed: {type(exc).__name__}: {str(exc)[:160]}") from exc
+                raise RuntimeError(f"Quotex connection failed: {type(exc).__name__}: {str(exc)[:160]}") from exc
     rows=list(_rows.get(symbol,[]))
     if len(rows)<30:
         raise RuntimeError(f"No verified OHLC stream yet for {symbol}; received {len(rows)} candle bars.")
