@@ -63,3 +63,16 @@ The adapter is intentionally read-only: it connects, authenticates the selected 
 **Important limitations:** this is an unofficial community library, not an official Quotex API. Its README marks some features as placeholders/mock implementations, and live candle event payloads and authentication must be verified against the broker session before treating them as working market data. A successful WebSocket/authentication response alone does not prove that real candles are arriving. Use Demo for initial connection testing. Real-account session use carries account risk. Use only where permitted by Quotex's terms and applicable law.
 
 The library may change or stop working when Quotex changes its service. Signals remain heuristic research outputs, not guaranteed next-candle predictions. Validate with timestamp-safe backtests and forward-testing; confidence scores are not calibrated probabilities unless tested on out-of-sample data.
+
+
+## Live tick + candle stream (read-only)
+
+The `quotexapi` adapter now also registers the community library's quote callbacks and subscribes to quotes for each configured symbol, alongside its existing 60-second candle subscriptions. This uses the same single selected Quotex account session for OTC symbols ending in `_otc` and plain symbols. Whether the broker actually streams each requested symbol must be verified with the account and pair catalogue; no data is synthesized.
+
+- `GET /api/ticks` returns the latest observed tick per symbol.
+- `WS /ws/market` pushes tick snapshots to connected browser clients. Clients should send a small text heartbeat at least every 10 seconds; the server closes inactive clients after 12 seconds.
+- Candle history remains available through the existing `/api/candles` endpoint and the existing 60-second subscription.
+
+The WebSocket integration is based on the upstream library's documented `on_quote` / `subscribe_quotes` and `on_candle` / `subscribe_candles` interfaces. It is unofficial and has not been validated against every Quotex account or symbol. If a symbol produces no ticks, check the Render logs and confirm that the symbol identifier is supported. Never share the SSID.
+
+For Render Free, a connected browser must keep sending heartbeat messages: free services spin down after 15 minutes without inbound HTTP requests or WebSocket messages. A free instance can still restart or disconnect, so this is best-effort hobby streaming, not guaranteed 24/7 uptime. See https://render.com/docs/free and https://render.com/docs/websocket.
