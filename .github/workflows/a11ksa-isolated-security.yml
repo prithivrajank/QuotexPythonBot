@@ -8,6 +8,8 @@ on:
       - "patch_a11ksa_tls.py"
       - "tests/test_patch_a11ksa_tls.py"
       - "tests/test_a11ksa_provider.py"
+      - "a11ksa_candle_transport.py"
+      - "tests/test_a11ksa_candle_transport.py"
       - "scripts/verify_a11ksa_tls.py"
       - "requirements-a11ksa-test.txt"
       - ".github/workflows/a11ksa-isolated-security.yml"
@@ -65,6 +67,6 @@ jobs:
       # The overall job still remains failed if the live TLS check fails.
       - name: Run adapter and TLS patch unit tests
         if: always() && steps.tls_check.outcome != 'cancelled'
-        run: python -m pytest -q tests/test_a11ksa_provider.py tests/test_patch_a11ksa_tls.py
+        run: python -m pytest -q tests/test_a11ksa_provider.py tests/test_patch_a11ksa_tls.py tests/test_a11ksa_candle_transport.py
 
 # Security note: this workflow intentionally performs no account login or session-authenticated request.
