@@ -69,3 +69,32 @@ def test_api_error_does_not_return_fake_candles(monkeypatch):
     monkeypatch.setattr(data_collector, "_get", fail)
     with pytest.raises(MarketDataError, match="provider unavailable"):
         get_candles("EUR/USD", 60, 100)
+
+
+
+def test_quantex_catalogue_is_not_reported_as_live_ticks(monkeypatch):
+    monkeypatch.setenv("MARKET_DATA_PROVIDER", "quantex")
+    monkeypatch.setenv("QUANTEX_API_KEY", "test-key")
+    monkeypatch.setattr(data_collector, "_qx_request", lambda path, params: {
+        "ok": True, "data": [{"symbol": "EURUSD_otc"}]
+    })
+    status = connection_status()
+    assert status["connected"] is True
+    assert status["catalogue_available"] is True
+    assert status["live_data"] is False
+    assert status["streaming_available"] is False
+    assert "not live ticks" in status["message"]
+
+
+def test_quantex_rejects_inconsistent_ohlc(monkeypatch):
+    monkeypatch.setenv("MARKET_DATA_PROVIDER", "quantex")
+    monkeypatch.setenv("QUANTEX_API_KEY", "test-key")
+    monkeypatch.setattr(data_collector, "_qx_request", lambda path, params: {
+        "ok": True,
+        "data": {"candles": [{
+            "epoch": 1793268000, "open": "1.2", "high": "1.1",
+            "low": "1.0", "close": "1.15"
+        }]}
+    })
+    with pytest.raises(MarketDataError, match="inconsistent OHLC"):
+        get_candles("EURUSD_otc", 60, 1)
