@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 import asyncio
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
 from data_collector import MarketDataError, connection_status, data_source_label, get_assets, get_candles
@@ -48,6 +48,38 @@ def bot_control(action: str):
 @app.get("/api/status")
 def status():
     return connection_status()
+
+
+@app.get("/api/ticks")
+def latest_ticks():
+    """Latest real quote events observed from the configured Quotex session."""
+    from quotexapi_provider import get_ticks
+    return {"source": "ChipaDevTeam QuotexAPI WebSocket (unofficial)",
+            "ticks": get_ticks(), "read_only": True}
+
+
+@app.websocket("/ws/market")
+async def market_stream(websocket: WebSocket):
+    """Push the latest observed tick snapshots to browser clients."""
+    await websocket.accept()
+    from quotexapi_provider import _ensure_connection, get_ticks
+    _ensure_connection()
+    try:
+        while True:
+            await websocket.send_json({
+                "type": "ticks",
+                "ticks": get_ticks(),
+                "server_time": datetime.now(timezone.utc).isoformat(),
+                "read_only": True,
+            })
+            # Browser heartbeat counts as inbound WebSocket traffic on Render Free.
+            try:
+                await asyncio.wait_for(websocket.receive_text(), timeout=12)
+            except asyncio.TimeoutError:
+                await websocket.close(code=1001, reason="Client heartbeat timeout")
+                break
+    except WebSocketDisconnect:
+        pass
 
 
 @app.get("/api/assets")
