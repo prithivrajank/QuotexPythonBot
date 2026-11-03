@@ -7,11 +7,11 @@ import os
 import threading
 from typing import Any
 
-import requests
 
 from data_collector import MarketDataError, data_source_label, get_candles
 from signal_history import record_signal, score_due_outcomes
 from strategies import analyze_candles, build_chart_data
+from telegram_market_data import notify_new_candle, telegram_configured
 
 DEFAULT_SYMBOLS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
@@ -32,7 +32,6 @@ DEFAULT_REFRESH_SECONDS = 300
 _lock = threading.Lock()
 _snapshots: dict[str, dict[str, Any]] = {}
 _next_symbol_index = 0
-_last_alerted_signal: dict[str, str] = {}
 _bot_enabled = False
 
 
@@ -115,50 +114,6 @@ def get_watchlist() -> dict[str, Any]:
     }
 
 
-def _telegram_alert(snapshot: dict[str, Any]) -> None:
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-    if not token or not chat_id:
-        return
-    symbol = snapshot["symbol"]
-    signal = snapshot["analysis"]["signal"]
-    previous = _last_alerted_signal.get(symbol)
-    _last_alerted_signal[symbol] = signal
-    if previous is not None and signal == previous:
-        return
-
-    analysis = snapshot["analysis"]
-    candle = snapshot["latest_candle"]
-    text = (
-        "Market-data signal summary (read-only; not a trade guarantee)\n"
-        f"Symbol: {symbol}\n"
-        f"Market type: {candle.get('market_type', 'provider-specific')}\n"
-        f"Data source: {candle.get('source', data_source_label())}\n"
-        f"Candle timeframe: {snapshot['timeframe_seconds']} seconds (1-minute candle)\n"
-        f"Trade expiry: {str(analysis.get('expiry_recommendation_minutes')) + ' minute(s)' if analysis.get('expiry_recommendation_minutes') else 'WAIT / no expiry'}\n"
-        f"Candle status: {snapshot.get('candle_status', 'provider-update-dependent')}\n"
-        f"Signal: {signal}\n"
-        f"Strength: {analysis.get('signal_strength', 'N/A')} (heuristic, not probability)\n"
-        f"Expiry suggestion: {str(analysis.get('expiry_recommendation_minutes')) + ' minute(s)' if analysis.get('expiry_recommendation_minutes') else 'WAIT / no expiry'}\n"
-        f"Expiry reason: {analysis.get('expiry_reason', 'N/A')}\n"
-        f"Reason: {analysis.get('reason', 'N/A')}\n"
-        f"Close: {candle.get('close')}\n"
-        f"RSI(14): {analysis.get('rsi_14')}\n"
-        f"MACD histogram: {analysis.get('macd_histogram')}\n"
-        f"Support / resistance (20 bars): {analysis.get('support_20')} / {analysis.get('resistance_20')}\n"
-        "Heuristic only; not financial advice or a guaranteed prediction."
-    )
-    try:
-        response = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
-            timeout=10,
-        )
-        response.raise_for_status()
-    except requests.RequestException:
-        return
-
-
 def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
     """Fetch one symbol; scheduled calls rotate through the watchlist."""
     global _next_symbol_index
@@ -203,14 +158,16 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
             "message": "Scheduled refresh successful.",
             "refresh_interval_seconds": refresh_interval_seconds(),
             "estimated_minutes_per_symbol": round(len(symbols) * refresh_interval_seconds() / 60, 1),
-            "telegram_configured": bool(os.getenv("TELEGRAM_BOT_TOKEN", "").strip() and os.getenv("TELEGRAM_CHAT_ID", "").strip()),
+            "telegram_configured": telegram_configured(),
             "disclaimer": "Data source depends on MARKET_DATA_PROVIDER. Third-party market data and heuristic signals are not a guarantee or financial advice.",
         }
         with _lock:
             _snapshots[selected] = snapshot
-        # Alert on a changed signal even when the provider updates the same still-forming candle.
-        # The scheduler remains quota-aware and does not provide true tick-by-tick streaming.
-        _telegram_alert(snapshot)
+        # Telegram receives market-data candle updates only; never send strategy outputs.
+        notification = notify_new_candle(snapshot)
+        snapshot["telegram_notification"] = notification
+        with _lock:
+            _snapshots[selected] = snapshot
         return dict(snapshot)
     except (MarketDataError, ValueError, TypeError) as exc:
         error_snapshot = {
