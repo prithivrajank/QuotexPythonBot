@@ -52,12 +52,14 @@ CALL/PUT/WAIT labels, indicator summaries, and expiry suggestions are heuristic 
 Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in Render Environment. Do not store credentials in source code. With OTCharts' free tier, automatic polling is disabled, so the bot cannot provide continuous scheduled Telegram signals on that tier.
 
 
-## ChipaDevTeam QuotexAPI Demo connection (read-only)
+## ChipaDevTeam QuotexAPI connection (read-only)
 
-The selected integration uses the unofficial [ChipaDevTeam QuotexAPI](https://github.com/ChipaDevTeam/QuotexAPI) Python library. Set `MARKET_DATA_PROVIDER=quotexapi` and provide `QUOTEX_SSID` in Render Environment. Use an SSID from a logged-in **Quotex Demo** browser session; do not paste it into GitHub, this chat, a URL, or frontend code. Keep `QUOTEX_IS_DEMO=true`.
+The selected integration uses the unofficial [ChipaDevTeam QuotexAPI](https://github.com/ChipaDevTeam/QuotexAPI) Python library. Set `MARKET_DATA_PROVIDER=quotexapi`, `QUOTEX_ACCOUNT=demo` or `QUOTEX_ACCOUNT=real`, and `QUOTEX_SSID` in Render Environment. The SSID must belong to the selected account mode. One authenticated account is supported per running Render process; switching between Demo and Real requires changing `QUOTEX_ACCOUNT`, supplying that account's own session value, and redeploying. Demo and Real are not connected simultaneously.
 
-The adapter is intentionally read-only: it connects, authenticates the Demo session, subscribes to configured candle/depth events, and accepts only payloads containing valid OHLC values. It does not call any order placement, cancellation, or account-switching methods.
+Set `FOREX_SYMBOLS` to a comma-separated list. Symbols ending in `_otc` are treated as Quotex OTC instruments; symbols without that suffix are treated as live forex, for example `EURUSD_otc,GBPUSD_otc,EURUSD,GBPUSD`. Confirm exact symbol identifiers and availability in the selected Quotex account.
 
-**Important limitations:** this is an unofficial community library, not an official Quotex API. Its README marks some features as placeholders/mock implementations, and its candle event payloads must be verified against the live broker session before treating them as working market data. A successful WebSocket/authentication response alone does not prove that real candles are arriving. The dashboard should remain in WAIT until enough valid OHLC bars are received. Use only where permitted by Quotex's terms and applicable law.
+The adapter is intentionally read-only: it connects, authenticates the selected session, subscribes to configured 60-second candle events, and accepts only payloads containing explicit, internally consistent OHLC values. It does not call order placement, cancellation, deposit, withdrawal, or account-switching methods.
+
+**Important limitations:** this is an unofficial community library, not an official Quotex API. Its README marks some features as placeholders/mock implementations, and live candle event payloads and authentication must be verified against the broker session before treating them as working market data. A successful WebSocket/authentication response alone does not prove that real candles are arriving. Use Demo for initial connection testing. Real-account session use carries account risk. Use only where permitted by Quotex's terms and applicable law.
 
 The library may change or stop working when Quotex changes its service. Signals remain heuristic research outputs, not guaranteed next-candle predictions. Validate with timestamp-safe backtests and forward-testing; confidence scores are not calibrated probabilities unless tested on out-of-sample data.
