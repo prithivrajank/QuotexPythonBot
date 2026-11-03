@@ -33,5 +33,5 @@ services:
         value: "60"
       - key: DATABASE_PATH
         value: "/tmp/forex_signal_history.db"
-      - key: QUOTEX_IS_DEMO
-        value: "true"
+      - key: QUOTEX_ACCOUNT
+        value: "demo"
