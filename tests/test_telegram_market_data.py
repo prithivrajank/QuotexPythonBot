@@ -2,8 +2,14 @@ import telegram_market_data as notifier
 
 
 class FakeResponse:
+    def __init__(self, payload=None):
+        self.payload = payload or {"ok": True}
+
     def raise_for_status(self):
         return None
+
+    def json(self):
+        return self.payload
 
 
 def sample_snapshot(timestamp=1790000000):
@@ -66,3 +72,24 @@ def test_missing_telegram_credentials_do_not_send(monkeypatch):
     result = notifier.notify_new_candle(sample_snapshot())
 
     assert result == {"sent": False, "reason": "telegram_not_configured"}
+
+
+
+def test_telegram_api_rejection_is_not_marked_sent(monkeypatch):
+    notifier._last_notified_candle.clear()
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "12345")
+    monkeypatch.setattr(
+        notifier.requests,
+        "post",
+        lambda *a, **kw: FakeResponse({"ok": False, "error_code": 400, "description": "chat not found"}),
+    )
+
+    result = notifier.notify_new_candle(sample_snapshot())
+
+    assert result == {
+        "sent": False,
+        "reason": "telegram_rejected_message",
+        "error_code": 400,
+    }
+    assert "EURUSD_otc" not in notifier._last_notified_candle
