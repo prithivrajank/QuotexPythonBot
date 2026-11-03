@@ -74,7 +74,7 @@ def build_candle_frames(asset: str, timeframe_seconds: int = 60) -> tuple[str, s
     return (
         _event_frame("instruments/follow", symbol),
         _event_frame("instruments/update", {"asset": symbol, "period": 60}),
-        _event_frame("chart_notification/get", {"asset": symbol}),
+        _event_frame("chart_notification/get", {"asset": symbol, "version": "1.0.0"}),
     )
 
 
