@@ -23,7 +23,8 @@ DEFAULT_QUANTEX_SYMBOLS = ["EURUSD_otc", "GBPUSD_otc", "USDJPY_otc", "EURUSD", "
 def _normalize_symbol(value: str) -> str:
     if os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower() in ("quantex", "otcharts", "quotexapi"):
         value = value.strip()
-        return value[:-4] + "_otc" if value.lower().endswith("_otc") else value.replace("/", "").replace("-", "").upper()
+        normalized = value.replace("/", "").replace("-", "").upper()
+        return normalized[:-4] + "_otc" if normalized.endswith("_OTC") else normalized
     return value.strip().upper().replace("-", "/")
 TIMEFRAME_SECONDS = int(os.getenv("FOREX_TIMEFRAME_SECONDS", "60"))
 CANDLE_LIMIT = 100
