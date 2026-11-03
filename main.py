@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 import asyncio
+import os
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -72,23 +73,51 @@ connect();
 
 @app.get("/api/ticks")
 def latest_ticks():
-    """Latest real quote events observed from the configured Quotex session."""
+    """Return only genuine provider quote events; candle closes are never relabelled as ticks."""
+    provider = os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower()
+    if provider != "quotexapi":
+        return {
+            "source": data_source_label(),
+            "ticks": [],
+            "streaming_available": False,
+            "message": (
+                "The selected provider exposes REST candle data in this integration, not a verified tick stream. "
+                "No candle close is being presented as a live tick."
+            ),
+            "read_only": True,
+        }
     from quotexapi_provider import get_ticks
-    return {"source": "ChipaDevTeam QuotexAPI WebSocket (unofficial)",
-            "ticks": get_ticks(), "read_only": True}
+    return {
+        "source": data_source_label(),
+        "ticks": get_ticks(),
+        "streaming_available": True,
+        "read_only": True,
+    }
 
 
 @app.websocket("/ws/market")
 async def market_stream(websocket: WebSocket):
-    """Push the latest observed tick snapshots to browser clients."""
+    """Push genuine quote snapshots only when the selected provider has a quote stream."""
     await websocket.accept()
-    from quotexapi_provider import _ensure_connection, get_ticks
-    _ensure_connection()
+    provider = os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower()
+    get_ticks = None
+    if provider == "quotexapi":
+        from quotexapi_provider import _ensure_connection, get_ticks as quotex_get_ticks
+        _ensure_connection()
+        get_ticks = quotex_get_ticks
     try:
         while True:
+            ticks = get_ticks() if get_ticks else []
             await websocket.send_json({
                 "type": "ticks",
-                "ticks": get_ticks(),
+                "ticks": ticks,
+                "streaming_available": get_ticks is not None,
+                "message": (
+                    "Waiting for verified quote events."
+                    if get_ticks is not None else
+                    "Selected provider has no verified tick-stream adapter; use the candle endpoint for REST data."
+                ),
+                "source": data_source_label(),
                 "server_time": datetime.now(timezone.utc).isoformat(),
                 "read_only": True,
             })
