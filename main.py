@@ -50,6 +50,26 @@ def status():
     return connection_status()
 
 
+
+@app.get("/live", response_class=HTMLResponse)
+def live_ticks_page():
+    return """<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Quotex Live Ticks</title><style>
+body{font:16px system-ui;background:#10131a;color:#f3f4f6;margin:24px auto;padding:0 14px;max-width:850px}section{background:#1c2230;padding:16px;border-radius:12px;margin:12px 0}small,.muted{color:#aab4c5}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:10px;border-bottom:1px solid #39445a}.price{font-variant-numeric:tabular-nums;font-weight:700}.pill{padding:5px 9px;border-radius:20px;background:#303b52}
+</style></head><body><h1>Quotex Live Ticks</h1><p class='muted'>Read-only quote stream · OTC + normal symbols · no trades</p><section><span id='status' class='pill'>Connecting…</span><p id='source' class='muted'>Waiting for first quote…</p><table><thead><tr><th>Symbol</th><th>Market</th><th>Price</th><th>Time (local)</th></tr></thead><tbody id='rows'><tr><td colspan='4'>No ticks received yet.</td></tr></tbody></table></section><p class='muted'>This page sends a heartbeat to keep the Render WebSocket active. Data appears only when the configured provider sends actual quote events.</p>
+<script>
+const statusEl=document.getElementById('status'),rowsEl=document.getElementById('rows');
+let ws,heartbeat;
+function connect(){const scheme=location.protocol==='https:'?'wss':'ws';ws=new WebSocket(scheme+'://'+location.host+'/ws/market');
+ws.onopen=()=>{statusEl.textContent='Connected';heartbeat=setInterval(()=>{if(ws&&ws.readyState===1)ws.send('ping')},5000)};
+ws.onmessage=e=>{const d=JSON.parse(e.data);const ticks=d.ticks||[];if(!ticks.length){document.getElementById('source').textContent='WebSocket connected; waiting for provider tick events.';return}
+document.getElementById('source').textContent='Last server update: '+new Date(d.server_time).toLocaleTimeString();
+rowsEl.innerHTML=ticks.map(t=>'<tr><td>'+t.symbol+'</td><td>'+t.market_type+'</td><td class="price">'+Number(t.price).toPrecision(9)+'</td><td>'+new Date(t.time*1000).toLocaleTimeString()+'</td></tr>').join('')};
+ws.onclose=()=>{statusEl.textContent='Disconnected · reconnecting';clearInterval(heartbeat);setTimeout(connect,3000)};
+ws.onerror=()=>{statusEl.textContent='Connection error'};}
+connect();
+</script></body></html>"""
+
+
 @app.get("/api/ticks")
 def latest_ticks():
     """Latest real quote events observed from the configured Quotex session."""
