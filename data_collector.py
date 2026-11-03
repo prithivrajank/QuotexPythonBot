@@ -68,10 +68,13 @@ def _qx_candles(asset: str, timeframe_seconds: int, limit: int) -> list[dict[str
             vals = {k: float(row[k]) for k in ("open", "high", "low", "close")}
         except (KeyError, TypeError, ValueError, OverflowError):
             raise MarketDataError(f"QUANTEX candle #{i + 1} has invalid fields.") from None
-        if timestamp < 0 or any(not math.isfinite(v) for v in vals.values()):
+        if timestamp <= 0 or any(not math.isfinite(v) for v in vals.values()):
             raise MarketDataError(f"QUANTEX candle #{i + 1} contains invalid values.")
+        o, h, low, close = vals["open"], vals["high"], vals["low"], vals["close"]
+        if h < max(o, close, low) or low > min(o, close, h):
+            raise MarketDataError(f"QUANTEX candle #{i + 1} has inconsistent OHLC values.")
         result.append({"time": timestamp, **vals, "symbol": symbol, "timeframe_seconds": timeframe_seconds,
-            "venue": "quantex", "market_type": "OTC" if symbol.lower().endswith("_otc") else "live forex", "source": data_source_label()})
+            "venue": "quantex", "market_type": "Quotex OTC" if symbol.lower().endswith("_otc") else "standard forex (QUANTEX)", "source": data_source_label()})
     result.sort(key=lambda item: item["time"])
     return result[-limit:]
 
@@ -233,9 +236,10 @@ def connection_status() -> dict[str, Any]:
             count = len(body.get("data", []))
         except MarketDataError as exc:
             return {"connected": False, "live_data": False, "credentials_configured": True, "message": str(exc), "source": data_source_label()}
-        return {"connected": True, "live_data": True, "credentials_configured": True,
-                "message": f"QUANTEX API key accepted; OTC pair catalogue returned {count} pairs.",
-                "source": data_source_label(), "market_type": "Quotex live and OTC pairs",
+        return {"connected": True, "live_data": False, "credentials_configured": True,
+                "catalogue_available": True, "streaming_available": False,
+                "message": f"QUANTEX API key accepted; OTC pair catalogue returned {count} pairs. This confirms API access only, not live ticks or a streaming connection.",
+                "source": data_source_label(), "market_type": "Quotex OTC catalogue",
                 "affiliation": "Third-party provider; not operated by Quotex."}
     if not os.getenv("TWELVE_DATA_API_KEY", "").strip():
         return {
