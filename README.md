@@ -47,9 +47,18 @@ Set provider-specific environment variables only in Render's Environment UI. Do 
 
 CALL/PUT/WAIT labels, indicator summaries, and expiry suggestions are heuristic analysis, not validated probabilities, financial advice, or guaranteed predictions. OTC quotes are a broker-specific synthetic series and may differ from standard forex prices. Test against the source chart before relying on any result.
 
-## Optional Telegram alerts
+## Telegram market-data notifications (read-only)
 
-Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in Render Environment. Do not store credentials in source code. With OTCharts' free tier, automatic polling is disabled, so the bot cannot provide continuous scheduled Telegram signals on that tier.
+Set these two environment variables in Render → your service → Environment:
+
+- `TELEGRAM_BOT_TOKEN`: create a bot with Telegram's official `@BotFather` and copy its token directly into Render.
+- `TELEGRAM_CHAT_ID`: the destination chat ID. Start the bot and send it a message first; obtain the chat ID using a trusted Telegram bot-management method.
+
+Never paste either value into GitHub, source code, screenshots, logs, or this chat. Save the variables and redeploy the Render service.
+
+After configuration, each successfully fetched **new candle timestamp** can generate one Telegram message containing the symbol, market type, provider, timeframe, candle time, and OHLC values. Repeated refreshes of the same candle are suppressed in the running process. Telegram messages contain market data only—no CALL/PUT/WAIT analysis and no trade instructions.
+
+Manual refreshes can send a notification too. Scheduled notifications require the provider's scheduled refresh to be enabled; OTCharts' free tier remains manual-refresh-only, so it will not send continuous scheduled updates. Telegram delivery requires a successful provider candle fetch and a reachable Telegram API.
 
 
 ## ChipaDevTeam QuotexAPI connection (read-only)
