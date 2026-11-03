@@ -28,7 +28,7 @@ _connection_lock = threading.Lock()
 def _get_ssid() -> str:
     raw=os.getenv("QUOTEX_SSID","").strip()
     if not raw:
-        raise ValueError("Set QUOTEX_SSID in Render Environment using your Quotex Demo browser session.")
+        raise ValueError("Set QUOTEX_SSID in Render Environment using the browser session for the selected QUOTEX_ACCOUNT.")
     match=re.search(r'"session"\s*:\s*"([^"]+)"', raw)
     if match:
         return match.group(1)
@@ -51,13 +51,13 @@ def _symbols() -> list[str]:
 
 def _account_mode() -> tuple[bool, str]:
     """One account per Render process; switch using QUOTEX_ACCOUNT and redeploy."""
-    raw=os.getenv("QUOTEX_ACCOUNT", "demo").strip().lower()
+    raw=os.getenv("QUOTEX_ACCOUNT", "").strip().lower()
+    if not raw:
+        legacy=os.getenv("QUOTEX_IS_DEMO", "true").strip().lower()
+        raw = "demo" if legacy in {"true","1","yes"} else "real"
     if raw not in {"demo", "real"}:
         raise ValueError("QUOTEX_ACCOUNT must be 'demo' or 'real'.")
     is_demo=raw == "demo"
-    legacy=os.getenv("QUOTEX_IS_DEMO", "").strip().lower()
-    if legacy in {"true","1","yes"}: is_demo=True
-    elif legacy in {"false","0","no"}: is_demo=False
     return is_demo, ("Demo" if is_demo else "Real")
 
 
