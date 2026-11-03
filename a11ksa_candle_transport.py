@@ -143,7 +143,7 @@ class ReadOnlyCandleTransport:
                 close_timeout=5,
                 ping_interval=20,
                 ping_timeout=10,
-                additional_headers={
+                extra_headers={
                     "Origin": "https://qxbroker.com",
                     "Referer": "https://qxbroker.com/",
                     "User-Agent": "Mozilla/5.0",
