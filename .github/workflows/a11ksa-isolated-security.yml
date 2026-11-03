@@ -57,10 +57,14 @@ jobs:
           print("Installed package TLS configuration is verified.")
           PY
 
-      - name: Verify certificate chain and hostname against Quotex WebSocket host
+      - name: Verify DNS, TCP reachability, and TLS certificate/hostname
+        id: tls_check
         run: python scripts/verify_a11ksa_tls.py
 
+      # Run local tests even when the hosted runner cannot reach Quotex.
+      # The overall job still remains failed if the live TLS check fails.
       - name: Run adapter and TLS patch unit tests
+        if: always() && steps.tls_check.outcome != 'cancelled'
         run: python -m pytest -q tests/test_a11ksa_provider.py tests/test_patch_a11ksa_tls.py
 
 # Security note: this workflow intentionally performs no account login or session-authenticated request.
