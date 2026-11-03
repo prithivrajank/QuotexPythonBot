@@ -11,10 +11,22 @@ import ssl
 import time
 
 HOST = "ws2.qxbroker.com"
+DNS_CONTROL_HOST = "github.com"
 PORT = 443
 TIMEOUT_SECONDS = 10
 DNS_ATTEMPTS = 3
 DNS_RETRY_SECONDS = 2
+
+
+def check_runner_dns() -> bool:
+    """Check whether the runner's system resolver works for a known control host."""
+    try:
+        socket.getaddrinfo(DNS_CONTROL_HOST, 443, type=socket.SOCK_STREAM)
+        print(f"DNS_CONTROL_OK host={DNS_CONTROL_HOST}", flush=True)
+        return True
+    except socket.gaierror as exc:
+        print(f"RUNNER_DNS_FAILURE control_host={DNS_CONTROL_HOST}: {exc}", flush=True)
+        return False
 
 
 def resolve_host() -> list[tuple]:
@@ -53,6 +65,10 @@ def resolve_host() -> list[tuple]:
 
 
 def main() -> int:
+    if not check_runner_dns():
+        print("DNS_INFRASTRUCTURE_FAILURE: runner resolver cannot resolve the control host.")
+        return 13
+
     try:
         addresses = resolve_host()
     except RuntimeError as exc:
