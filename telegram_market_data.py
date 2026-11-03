@@ -59,7 +59,11 @@ def notify_new_candle(snapshot: dict[str, Any]) -> dict[str, Any]:
                 timeout=10,
             )
             response.raise_for_status()
-        except requests.RequestException:
+            payload = response.json()
+            if not isinstance(payload, dict) or payload.get("ok") is not True:
+                error_code = payload.get("error_code") if isinstance(payload, dict) else None
+                return {"sent": False, "reason": "telegram_rejected_message", "error_code": error_code}
+        except (requests.RequestException, ValueError):
             return {"sent": False, "reason": "telegram_delivery_failed"}
         _last_notified_candle[symbol] = candle_time
         return {"sent": True, "reason": "new_candle"}
