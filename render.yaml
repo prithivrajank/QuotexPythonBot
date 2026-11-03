@@ -28,7 +28,7 @@ services:
       - key: REFRESH_INTERVAL_SECONDS
         value: "300"
       - key: FOREX_SYMBOLS
-        value: "EURUSD_otc,GBPUSD_otc,USDJPY_otc,AUDUSD_otc,USDCAD_otc"
+        value: "EURUSD_otc,GBPUSD_otc,USDJPY_otc,EURUSD,GBPUSD,USDJPY"
       - key: FOREX_TIMEFRAME_SECONDS
         value: "60"
       - key: DATABASE_PATH
