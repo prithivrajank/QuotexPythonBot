@@ -10,7 +10,7 @@ import socket
 import ssl
 import time
 
-HOST = "ws2.qxbroker.com"
+HOST = "ws2.quotex.com"
 DNS_CONTROL_HOST = "github.com"
 PORT = 443
 TIMEOUT_SECONDS = 10
