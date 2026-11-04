@@ -10,7 +10,8 @@ on:
       - "tests/test_a11ksa_provider.py"
       - "a11ksa_candle_transport.py"
       - "tests/test_a11ksa_candle_transport.py"
-      - "scripts/verify_a11ksa_tls.py"\n      - "scripts/verify_quotex_websocket_handshake.py"
+      - "scripts/verify_a11ksa_tls.py"
+      - "scripts/verify_quotex_websocket_handshake.py"
       - "requirements-a11ksa-test.txt"
       - ".github/workflows/a11ksa-isolated-security.yml"
   workflow_dispatch:
@@ -63,7 +64,10 @@ jobs:
         id: tls_check
         run: python scripts/verify_a11ksa_tls.py
 
-      - name: Verify unauthenticated WebSocket and Engine.IO handshake\n        run: python scripts/verify_quotex_websocket_handshake.py\n\n      # Run local tests even when the hosted runner cannot reach Quotex.
+      - name: Verify unauthenticated WebSocket and Engine.IO handshake
+        run: python scripts/verify_quotex_websocket_handshake.py
+
+      # Run local tests even when the hosted runner cannot reach Quotex.
       # The overall job still remains failed if the live TLS check fails.
       - name: Run adapter and TLS patch unit tests
         if: always() && steps.tls_check.outcome != 'cancelled'
