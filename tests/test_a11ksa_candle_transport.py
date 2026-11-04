@@ -23,9 +23,9 @@ def test_tls_context_requires_verified_tls():
 
 
 def test_endpoint_is_pinned_to_reviewed_wss_host():
-    _validate_endpoint("wss://ws2.qxbroker.com/socket.io/?EIO=3&transport=websocket")
+    _validate_endpoint("wss://ws2.quotex.com/socket.io/?EIO=3&transport=websocket")
     with pytest.raises(CandleTransportError):
-        _validate_endpoint("ws://ws2.qxbroker.com/socket.io/")
+        _validate_endpoint("ws://ws2.quotex.com/socket.io/")
     with pytest.raises(CandleTransportError):
         _validate_endpoint("wss://example.com/socket.io/")
 
