@@ -9,7 +9,7 @@ It installs exactly:
 
 The workflow then patches the installed package, asserts that hostname and
 certificate validation are enabled, and performs a plain TLS handshake with
-`ws2.qxbroker.com:443`. The handshake sends no SSID, cookies, credentials, or
+`ws2.quotex.com:443`. The handshake sends no SSID, cookies, credentials, or
 WebSocket application messages.
 
 A successful TLS handshake proves only that the server certificate chain and
