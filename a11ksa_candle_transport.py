@@ -297,6 +297,7 @@ class ReadOnlyCandleTransport:
                 await ws.send(chart)
                 deadline = asyncio.get_running_loop().time() + self.timeout
                 pending_binary = False
+                pending_event = ""
                 while asyncio.get_running_loop().time() < deadline and len(received) < limit:
                     try:
                         msg = await asyncio.wait_for(
@@ -311,17 +312,26 @@ class ReadOnlyCandleTransport:
                         # Socket.IO binary event header; the following frame is its attachment.
                         try:
                             packet = json.loads(msg[4:])
+                            pending_event = packet[0] if isinstance(packet, list) and packet else ""
                             pending_binary = (
                                 isinstance(packet, list)
                                 and len(packet) > 1
-                                and packet[0] == "history/list/v2"
+                                and packet[0] in {"history/list/v2", "quotes/stream"}
                                 and isinstance(packet[1], dict)
-                                and packet[1].get("asset") == asset
+                                and (
+                                    packet[0] == "quotes/stream"
+                                    or packet[1].get("asset") == asset
+                                )
                             )
                         except (TypeError, ValueError):
                             pending_binary = False
                     elif pending_binary and isinstance(msg, bytes):
-                        received.extend(parse_candle_event(msg, asset))
+                        # The attachment type is determined by the preceding Socket.IO event.
+                        if pending_event == "quotes/stream":
+                            ticks = parse_quote_event(msg, asset)
+                            received.extend(aggregate_ticks_to_candles(ticks, asset))
+                        else:
+                            received.extend(parse_candle_event(msg, asset))
                         pending_binary = False
                     elif isinstance(msg, str) and msg.startswith("42"):
                         received.extend(parse_candle_event(msg, asset))
