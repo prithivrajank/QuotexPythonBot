@@ -135,7 +135,7 @@ def test_parser_rejects_unaligned_candle_timestamp():
     assert parse_candle_event(frame, "EURUSD_otc") == []
 
 def test_parse_observed_quotes_stream_binary_attachment():
-    frame = b'\\x04[["USDDZD_otc",1793803080.235,255.989,0]]'
+    frame = b'\x04[["USDDZD_otc",1793803080.235,255.989,0]]'
     ticks = parse_quote_event(frame, "USDDZD_otc")
     assert ticks == [{
         "asset": "USDDZD_otc",
@@ -146,7 +146,7 @@ def test_parse_observed_quotes_stream_binary_attachment():
 
 
 def test_quote_parser_rejects_wrong_asset_and_invalid_values():
-    frame = b'\\x04' + json.dumps([
+    frame = b'\x04' + json.dumps([
         ["EURUSD_otc", 1793803080.235, 1.2, 0],
         ["USDDZD_otc", "bad-time", 255.9, 0],
         ["USDDZD_otc", 1793803080.235, float("inf"), 0],
@@ -156,7 +156,7 @@ def test_quote_parser_rejects_wrong_asset_and_invalid_values():
 
 def test_quote_ticks_aggregate_into_one_minute_ohlc():
     ticks = parse_quote_event(
-        b'\\x04' + json.dumps([
+        b'\x04' + json.dumps([
             ["USDDZD_otc", 1793803080.235, 255.989, 0],
             ["USDDZD_otc", 1793803082.0, 255.995, 0],
             ["USDDZD_otc", 1793803095.0, 255.980, 0],
