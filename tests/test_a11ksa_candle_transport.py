@@ -65,37 +65,69 @@ def test_candle_subscription_frames_are_only_60_seconds():
         build_candle_frames("EURUSD_otc", 300)
 
 
-def test_parse_accepts_only_explicit_matching_candle_payload():
+def test_parse_observed_binary_candle_payload():
+    body = {
+        "asset": "USDDZD_otc",
+        "period": 60,
+        "history": [[1793796987.576, 255.91, 0]],
+        "candles": [
+            [1793797500, 255.905, 255.9, 255.906, 255.9, 7, 1793797504.949],
+            [1793797440, 255.885, 255.905, 255.912, 255.885, 76, 1793797499.921],
+        ],
+    }
+    frame = b"\x04" + json.dumps(body).encode("utf-8")
+    rows = parse_candle_event(frame, "USDDZD_otc")
+    assert rows == [
+        {
+            "time": 1793797440, "open": 255.885, "high": 255.912,
+            "low": 255.885, "close": 255.905, "tick_count": 76,
+            "last_update": 1793797499.921,
+        },
+        {
+            "time": 1793797500, "open": 255.905, "high": 255.906,
+            "low": 255.9, "close": 255.9, "tick_count": 7,
+            "last_update": 1793797504.949,
+        },
+    ]
+
+
+def test_parse_accepts_matching_socketio_json_candle_event():
     frame = "42" + json.dumps(["history/list/v2", {
         "asset": "EURUSD_otc", "period": 60,
-        "history": [{"time": 1700000000, "open": 1.0, "high": 1.2,
-                     "low": 0.9, "close": 1.1}]
+        "candles": [[1700000040, 1.0, 1.1, 1.2, 0.9, 12, 1700000099.0]]
     }])
-    rows = parse_candle_event(frame, "EURUSD_otc")
-    assert rows == [{
-        "time": 1700000000, "open": 1.0, "high": 1.2, "low": 0.9, "close": 1.1
-    }]
+    assert parse_candle_event(frame, "EURUSD_otc")[0]["close"] == 1.1
 
 
 @pytest.mark.parametrize("frame", [
     "42" + json.dumps(["balance", {"balance": 100}]),
     "42" + json.dumps(["history/list/v2", {
-        "asset": "GBPUSD_otc", "period": 60, "history": []
+        "asset": "GBPUSD_otc", "period": 60, "candles": []
     }]),
     "42" + json.dumps(["history/list/v2", {
-        "asset": "EURUSD_otc", "period": 300, "history": []
+        "asset": "EURUSD_otc", "period": 300, "candles": []
     }]),
     "not-json",
-    "451-[\"history/list/v2\",{\"_placeholder\":true}]",
+    b"\x04not-json",
+    b"\x04" + json.dumps({
+        "asset": "EURUSD_otc", "period": 60, "history": [[1, 1, 1]]
+    }).encode(),
 ])
-def test_parser_rejects_non_candle_wrong_asset_wrong_timeframe_and_binary(frame):
+def test_parser_rejects_wrong_asset_timeframe_or_non_candle_payload(frame):
     assert parse_candle_event(frame, "EURUSD_otc") == []
 
 
 def test_parser_rejects_invalid_ohlc():
-    frame = "42" + json.dumps(["history/list/v2", {
+    frame = b"\x04" + json.dumps({
         "asset": "EURUSD_otc", "period": 60,
-        "history": [{"time": 1700000000, "open": 1.2, "high": 1.0,
-                     "low": 0.9, "close": 1.1}]
-    }])
+        "candles": [[1700000040, 1.2, 1.1, 1.0, 0.9, 12, 1700000099.0]]
+    }).encode()
+    assert parse_candle_event(frame, "EURUSD_otc") == []
+
+
+def test_parser_rejects_unaligned_candle_timestamp():
+    frame = b"\x04" + json.dumps({
+        "asset": "EURUSD_otc", "period": 60,
+        "candles": [[1700000001, 1.0, 1.1, 1.2, 0.9, 12, 1700000099.0]]
+    }).encode()
     assert parse_candle_event(frame, "EURUSD_otc") == []
