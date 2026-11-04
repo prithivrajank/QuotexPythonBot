@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 
 import websockets
 
-DEFAULT_ENDPOINT = "wss://ws2.qxbroker.com/socket.io/?EIO=3&transport=websocket"
+DEFAULT_ENDPOINT = "wss://ws2.quotex.com/socket.io/?EIO=3&transport=websocket"
 ALLOWED_OUTBOUND_EVENTS = frozenset({
     "authorization",
     "instruments/follow",
@@ -41,7 +41,7 @@ def _validate_endpoint(endpoint: str) -> None:
     parsed = urlsplit(endpoint)
     if parsed.scheme != "wss" or not parsed.hostname:
         raise CandleTransportError("Only a valid wss:// endpoint is permitted.")
-    if parsed.hostname != "ws2.qxbroker.com":
+    if parsed.hostname != "ws2.quotex.com":
         raise CandleTransportError("Endpoint host is not the reviewed Quotex host.")
 
 
@@ -145,7 +145,7 @@ class ReadOnlyCandleTransport:
                 ping_timeout=10,
                 extra_headers={
                     "Origin": "https://qxbroker.com",
-                    "Referer": "https://qxbroker.com/",
+                    "Referer": "https://quotex.com/",
                     "User-Agent": "Mozilla/5.0",
                 },
             ) as ws:
