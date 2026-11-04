@@ -1,6 +1,19 @@
 name: A11ksa isolated TLS security test
 
 on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "patch_a11ksa_tls.py"
+      - "tests/test_patch_a11ksa_tls.py"
+      - "tests/test_a11ksa_provider.py"
+      - "a11ksa_candle_transport.py"
+      - "tests/test_a11ksa_candle_transport.py"
+      - "scripts/verify_a11ksa_tls.py"
+      - "scripts/verify_quotex_websocket_handshake.py"
+      - "requirements-a11ksa-test.txt"
+      - ".github/workflows/a11ksa-isolated-security.yml"
   push:
     branches:
       - feature/a11ksa-candle-only-test
