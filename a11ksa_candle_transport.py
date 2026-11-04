@@ -318,10 +318,8 @@ class ReadOnlyCandleTransport:
                                 and len(packet) > 1
                                 and packet[0] in {"history/list/v2", "quotes/stream"}
                                 and isinstance(packet[1], dict)
-                                and (
-                                    packet[0] == "quotes/stream"
-                                    or packet[1].get("asset") == asset
-                                )
+                                # The binary-event header contains a placeholder only.
+                                # Validate asset and period after decoding the attachment.
                             )
                         except (TypeError, ValueError):
                             pending_binary = False
