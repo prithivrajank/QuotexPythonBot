@@ -102,9 +102,9 @@ def parse_quote_event(frame: str | bytes, expected_asset: str) -> list[dict[str,
     The flag is preserved without assigning undocumented semantics.
     """
     if isinstance(frame, bytes):
-        raw = frame.lstrip(b"\\x04 \\t\\r\\n")
+        raw = frame.lstrip(b"\x04 \t\r\n")
     elif isinstance(frame, str):
-        raw = frame.encode("utf-8").lstrip(b"\\x04 \\t\\r\\n")
+        raw = frame.encode("utf-8").lstrip(b"\x04 \t\r\n")
     else:
         return []
     try:
