@@ -12,6 +12,8 @@ from a11ksa_candle_transport import (
     build_candle_frames,
     build_tls_context,
     parse_candle_event,
+    parse_quote_event,
+    aggregate_ticks_to_candles,
 )
 
 
@@ -131,3 +133,47 @@ def test_parser_rejects_unaligned_candle_timestamp():
         "candles": [[1700000001, 1.0, 1.1, 1.2, 0.9, 12, 1700000099.0]]
     }).encode()
     assert parse_candle_event(frame, "EURUSD_otc") == []
+
+def test_parse_observed_quotes_stream_binary_attachment():
+    frame = b'\\x04[["USDDZD_otc",1793803080.235,255.989,0]]'
+    ticks = parse_quote_event(frame, "USDDZD_otc")
+    assert ticks == [{
+        "asset": "USDDZD_otc",
+        "timestamp": 1793803080.235,
+        "price": 255.989,
+        "flag": 0,
+    }]
+
+
+def test_quote_parser_rejects_wrong_asset_and_invalid_values():
+    frame = b'\\x04' + json.dumps([
+        ["EURUSD_otc", 1793803080.235, 1.2, 0],
+        ["USDDZD_otc", "bad-time", 255.9, 0],
+        ["USDDZD_otc", 1793803080.235, float("inf"), 0],
+    ]).encode()
+    assert parse_quote_event(frame, "USDDZD_otc") == []
+
+
+def test_quote_ticks_aggregate_into_one_minute_ohlc():
+    ticks = parse_quote_event(
+        b'\\x04' + json.dumps([
+            ["USDDZD_otc", 1793803080.235, 255.989, 0],
+            ["USDDZD_otc", 1793803082.0, 255.995, 0],
+            ["USDDZD_otc", 1793803095.0, 255.980, 0],
+            ["USDDZD_otc", 1793803141.0, 256.010, 0],
+        ]).encode(),
+        "USDDZD_otc",
+    )
+    candles = aggregate_ticks_to_candles(ticks, "USDDZD_otc")
+    assert len(candles) == 2
+    assert candles[0] == {
+        "time": 1793803080,
+        "open": 255.989,
+        "high": 255.995,
+        "low": 255.980,
+        "close": 255.980,
+        "tick_count": 3,
+        "last_update": 1793803095.0,
+    }
+    assert candles[1]["open"] == candles[1]["close"] == 256.010
+
