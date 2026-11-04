@@ -95,6 +95,80 @@ def _decode_binary_history(frame: str | bytes) -> dict[str, Any] | None:
     return body if isinstance(body, dict) else None
 
 
+def parse_quote_event(frame: str | bytes, expected_asset: str) -> list[dict[str, Any]]:
+    """Parse observed quotes/stream binary attachments.
+
+    Observed row: [asset, timestamp_seconds, price, flag].
+    The flag is preserved without assigning undocumented semantics.
+    """
+    if isinstance(frame, bytes):
+        raw = frame.lstrip(b"\\x04 \\t\\r\\n")
+    elif isinstance(frame, str):
+        raw = frame.encode("utf-8").lstrip(b"\\x04 \\t\\r\\n")
+    else:
+        return []
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, TypeError, ValueError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    ticks: list[dict[str, Any]] = []
+    for row in payload:
+        if not isinstance(row, (list, tuple)) or len(row) < 4:
+            continue
+        asset, timestamp, price, flag = row[:4]
+        if asset != expected_asset:
+            continue
+        try:
+            timestamp = float(timestamp)
+            price = float(price)
+            if not math.isfinite(timestamp) or not math.isfinite(price) or timestamp <= 0:
+                continue
+        except (TypeError, ValueError, OverflowError):
+            continue
+        ticks.append({
+            "asset": asset,
+            "timestamp": timestamp,
+            "price": price,
+            "flag": flag,
+        })
+    return sorted(ticks, key=lambda tick: tick["timestamp"])
+
+
+def aggregate_ticks_to_candles(
+    ticks: list[dict[str, Any]], expected_asset: str
+) -> list[dict[str, Any]]:
+    """Build UTC-aligned 60-second OHLC candles from validated quote ticks."""
+    buckets: dict[int, list[dict[str, Any]]] = {}
+    for tick in ticks:
+        if tick.get("asset") != expected_asset:
+            continue
+        try:
+            timestamp = float(tick["timestamp"])
+            price = float(tick["price"])
+            if not math.isfinite(timestamp) or not math.isfinite(price) or timestamp <= 0:
+                continue
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        minute = int(timestamp // 60) * 60
+        buckets.setdefault(minute, []).append({"timestamp": timestamp, "price": price})
+    candles = []
+    for minute, rows in sorted(buckets.items()):
+        rows.sort(key=lambda row: row["timestamp"])
+        prices = [row["price"] for row in rows]
+        candles.append({
+            "time": minute,
+            "open": prices[0],
+            "high": max(prices),
+            "low": min(prices),
+            "close": prices[-1],
+            "tick_count": len(prices),
+            "last_update": rows[-1]["timestamp"],
+        })
+    return candles
+
+
 def parse_candle_event(frame: str | bytes, expected_asset: str) -> list[dict[str, Any]]:
     """Parse verified 60-second candle arrays; ignore tick history and placeholders.
 
