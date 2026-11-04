@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import ssl
 from typing import Any
@@ -78,42 +79,80 @@ def build_candle_frames(asset: str, timeframe_seconds: int = 60) -> tuple[str, s
     )
 
 
-def parse_candle_event(frame: str, expected_asset: str) -> list[dict[str, Any]]:
-    """Parse only explicit candle event frames; unknown/ambiguous payloads fail closed."""
-    if not isinstance(frame, str) or not frame.startswith("42"):
-        return []
+def _decode_binary_history(frame: str | bytes) -> dict[str, Any] | None:
+    """Decode the observed binary attachment: EOT byte followed by UTF-8 JSON."""
+    if isinstance(frame, bytes):
+        raw = frame
+    elif isinstance(frame, str):
+        raw = frame.encode("utf-8")
+    else:
+        return None
+    raw = raw.lstrip(b"\x04 \t\r\n")
     try:
-        packet = json.loads(frame[2:])
-    except (TypeError, ValueError):
+        body = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, TypeError, ValueError):
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def parse_candle_event(frame: str | bytes, expected_asset: str) -> list[dict[str, Any]]:
+    """Parse verified 60-second candle arrays; ignore tick history and placeholders.
+
+    Observed candle row:
+    [timestamp, open, close, high, low, tick_count, last_update_timestamp]
+    """
+    body: Any = None
+    if isinstance(frame, str) and frame.startswith("42"):
+        try:
+            packet = json.loads(frame[2:])
+        except (TypeError, ValueError):
+            return []
+        if not isinstance(packet, list) or len(packet) < 2:
+            return []
+        event, body = packet[0], packet[1]
+        if event not in {"history/list/v2", "chart_notification/get", "loadHistoryPeriod"}:
+            return []
+    else:
+        body = _decode_binary_history(frame)
+
+    if not isinstance(body, dict):
         return []
-    if not isinstance(packet, list) or len(packet) < 2:
+    if body.get("asset") != expected_asset or body.get("period") != 60:
         return []
-    event, body = packet[0], packet[1]
-    if event not in {"history/list/v2", "chart_notification/get", "loadHistoryPeriod"}:
-        return []
-    if not isinstance(body, dict) or body.get("asset") != expected_asset:
-        return []
-    if body.get("period") != 60:
-        return []
-    rows = body.get("candles", body.get("history"))
+    rows = body.get("candles")
     if not isinstance(rows, list):
         return []
-    parsed = []
+
+    parsed: dict[int, dict[str, Any]] = {}
     for row in rows:
-        if not isinstance(row, dict):
-            continue
         try:
-            timestamp = int(row.get("time", row.get("timestamp")))
-            o, h, low, c = (float(row[k]) for k in ("open", "high", "low", "close"))
-        except (TypeError, ValueError, KeyError, OverflowError):
+            if not isinstance(row, (list, tuple)) or len(row) < 7:
+                continue
+            timestamp = int(float(row[0]))
+            open_price, close_price, high_price, low_price = map(float, row[1:5])
+            tick_count = int(row[5])
+            last_update = float(row[6])
+            values = (open_price, close_price, high_price, low_price, last_update)
+            if timestamp <= 0 or tick_count < 0 or not all(math.isfinite(v) for v in values):
+                continue
+            if timestamp % 60 != 0:
+                continue
+            if high_price < max(open_price, close_price, low_price):
+                continue
+            if low_price > min(open_price, close_price, high_price):
+                continue
+        except (TypeError, ValueError, OverflowError):
             continue
-        if timestamp <= 0 or not all(map(lambda x: x == x and abs(x) != float("inf"), (o, h, low, c))):
-            continue
-        if h < max(o, c, low) or low > min(o, c, h):
-            continue
-        parsed.append({"time": timestamp, "open": o, "high": h, "low": low, "close": c})
-    parsed.sort(key=lambda row: row["time"])
-    return parsed
+        parsed[timestamp] = {
+            "time": timestamp,
+            "open": open_price,
+            "high": high_price,
+            "low": low_price,
+            "close": close_price,
+            "tick_count": tick_count,
+            "last_update": last_update,
+        }
+    return [parsed[t] for t in sorted(parsed)]
 
 
 class ReadOnlyCandleTransport:
@@ -144,13 +183,12 @@ class ReadOnlyCandleTransport:
                 ping_interval=20,
                 ping_timeout=10,
                 extra_headers={
-                    "Origin": "https://qxbroker.com",
+                    "Origin": "https://quotex.com",
                     "Referer": "https://quotex.com/",
                     "User-Agent": "Mozilla/5.0",
                 },
             ) as ws:
                 self._ws = ws
-                # Engine.IO open -> Socket.IO connect.
                 first = await asyncio.wait_for(ws.recv(), timeout=self.timeout)
                 if not isinstance(first, str) or not first.startswith("0"):
                     raise CandleTransportError("Unexpected Engine.IO opening frame.")
@@ -177,23 +215,42 @@ class ReadOnlyCandleTransport:
                         authenticated = True
                         break
                     elif isinstance(msg, str) and msg.startswith("451-["):
-                        raise CandleTransportError("Unexpected binary/multipart frame; refusing ambiguous protocol.")
+                        raise CandleTransportError("Unexpected multipart frame during authorization.")
                 if not authenticated:
                     raise CandleTransportError("Demo authorization was not confirmed.")
                 await ws.send(follow)
                 await ws.send(update)
                 await ws.send(chart)
                 deadline = asyncio.get_running_loop().time() + self.timeout
+                pending_binary = False
                 while asyncio.get_running_loop().time() < deadline and len(received) < limit:
                     try:
-                        msg = await asyncio.wait_for(ws.recv(), timeout=max(0.1, deadline - asyncio.get_running_loop().time()))
+                        msg = await asyncio.wait_for(
+                            ws.recv(),
+                            timeout=max(0.1, deadline - asyncio.get_running_loop().time()),
+                        )
                     except asyncio.TimeoutError:
                         break
                     if msg == "2":
                         await ws.send("3")
-                    elif isinstance(msg, str):
+                    elif isinstance(msg, str) and msg.startswith("451-"):
+                        # Socket.IO binary event header; the following frame is its attachment.
+                        try:
+                            packet = json.loads(msg[4:])
+                            pending_binary = (
+                                isinstance(packet, list)
+                                and len(packet) > 1
+                                and packet[0] == "history/list/v2"
+                                and isinstance(packet[1], dict)
+                                and packet[1].get("asset") == asset
+                            )
+                        except (TypeError, ValueError):
+                            pending_binary = False
+                    elif pending_binary and isinstance(msg, bytes):
                         received.extend(parse_candle_event(msg, asset))
-                # Deduplicate by timestamp and return the newest rows.
+                        pending_binary = False
+                    elif isinstance(msg, str) and msg.startswith("42"):
+                        received.extend(parse_candle_event(msg, asset))
                 unique = {row["time"]: row for row in received}
                 return sorted(unique.values(), key=lambda row: row["time"])[-limit:]
         finally:
