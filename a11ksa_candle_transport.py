@@ -19,7 +19,6 @@ import websockets
 
 DEFAULT_ENDPOINT = "wss://ws2.quotex.com/socket.io/?EIO=3&transport=websocket"
 ALLOWED_OUTBOUND_EVENTS = frozenset({
-    "authorization",
     "instruments/follow",
     "instruments/update",
     "chart_notification/get",
@@ -56,15 +55,46 @@ def _event_frame(event: str, payload: Any) -> str:
 
 
 def build_authorization_frame(ssid: str) -> str:
+    """Return the raw SSID frame used by the inspected upstream client.
+
+    The upstream implementation sends the session identifier directly after
+    the Socket.IO '40' acknowledgement; it does not send a JSON authorization
+    event. The caller must supply a separately provisioned demo session.
+    """
     if not isinstance(ssid, str) or not ssid.strip():
-        raise CandleTransportError("Demo session is not configured.")
-    payload = {
-        "session": ssid.strip(),
-        "isDemo": 1,
-        "tournamentId": 0,
-        "isFastHistory": True,
-    }
-    return _event_frame("authorization", payload)
+        raise CandleTransportError("QUOTEX_DEMO_SSID is not configured.")
+    return ssid.strip()
+
+
+def parse_authorization_response(frame: str) -> dict[str, Any]:
+    """Accept only a structured s_authorization response with explicit demo proof.
+
+    A successful auth event alone does not prove that the session is a demo
+    account. Fail closed unless the response body explicitly identifies demo
+    mode. The exact upstream response schema still requires live verification.
+    """
+    if not isinstance(frame, str) or not frame.startswith("42"):
+        raise CandleTransportError("Unexpected authorization response frame.")
+    try:
+        packet = json.loads(frame[2:])
+    except (TypeError, ValueError):
+        raise CandleTransportError("Malformed authorization response.") from None
+    if not isinstance(packet, list) or len(packet) < 2:
+        raise CandleTransportError("Malformed authorization response packet.")
+    event, body = packet[0], packet[1]
+    if event in {"authorization/reject", "error"}:
+        raise CandleTransportError("Demo authorization was rejected.")
+    if event != "s_authorization" or not isinstance(body, dict):
+        raise CandleTransportError("Demo authorization was not confirmed.")
+    demo_value = next(
+        (body[key] for key in ("isDemo", "is_demo", "demo") if key in body),
+        None,
+    )
+    if demo_value not in (True, 1, "1", "true", "True", "demo", "DEMO"):
+        raise CandleTransportError(
+            "Authorization succeeded but the server did not explicitly confirm demo mode."
+        )
+    return body
 
 
 def build_candle_frames(asset: str, timeframe_seconds: int = 60) -> tuple[str, str, str]:
@@ -242,9 +272,9 @@ class ReadOnlyCandleTransport:
     async def fetch_candles(self, asset: str, limit: int = 100) -> list[dict[str, Any]]:
         if not 1 <= int(limit) <= 500:
             raise CandleTransportError("limit must be between 1 and 500.")
-        ssid = os.getenv("QUOTEX_SSID", "").strip()
+        ssid = os.getenv("QUOTEX_DEMO_SSID", "").strip()
         if not ssid:
-            raise CandleTransportError("QUOTEX_SSID is not configured in the private environment.")
+            raise CandleTransportError("QUOTEX_DEMO_SSID is not configured in the private environment.")
         auth_frame = build_authorization_frame(ssid)
         follow, update, chart = build_candle_frames(asset, 60)
         context = build_tls_context()
@@ -290,11 +320,16 @@ class ReadOnlyCandleTransport:
                     msg = await asyncio.wait_for(ws.recv(), timeout=self.timeout)
                     if msg == "2":
                         await ws.send("3")
-                    elif isinstance(msg, str) and msg.startswith('42["s_authorization"'):
+                    elif isinstance(msg, str) and msg.startswith("42"):
+                        # Do not accept a prefix-only auth acknowledgement.
+                        parse_authorization_response(msg)
                         authenticated = True
                         break
                     elif isinstance(msg, str) and msg.startswith("451-["):
                         raise CandleTransportError("Unexpected multipart frame during authorization.")
+                    elif isinstance(msg, str) and msg.startswith("42"):
+                        # Any non-success Socket.IO event is parsed and rejected.
+                        parse_authorization_response(msg)
                 if not authenticated:
                     raise CandleTransportError("Demo authorization was not confirmed.")
                 await ws.send(follow)
