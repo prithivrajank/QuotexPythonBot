@@ -18,10 +18,11 @@ DEFAULT_SYMBOLS = [
     "USD/CHF", "NZD/USD", "EUR/GBP", "EUR/JPY", "GBP/JPY",
 ]
 DEFAULT_QUANTEX_SYMBOLS = ["EURUSD_otc", "GBPUSD_otc", "USDJPY_otc", "EURUSD", "GBPUSD", "USDJPY"]
+DEFAULT_A11KSA_SYMBOLS = ["EURUSD_otc"]
 
 
 def _normalize_symbol(value: str) -> str:
-    if os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower() in ("quantex", "otcharts", "quotexapi"):
+    if os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower() in ("quantex", "otcharts", "quotexapi", "a11ksa"):
         value = value.strip()
         normalized = value.replace("/", "").replace("-", "").upper()
         return normalized[:-4] + "_otc" if normalized.endswith("_OTC") else normalized
@@ -52,7 +53,8 @@ def configured_symbols() -> list[str]:
     raw = os.getenv("FOREX_SYMBOLS", "").strip()
     if not raw:
         legacy = os.getenv("FOREX_SYMBOL", "").strip()
-        defaults = DEFAULT_QUANTEX_SYMBOLS if os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower() in ("quantex", "otcharts", "quotexapi") else DEFAULT_SYMBOLS
+        provider = os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower()
+        defaults = DEFAULT_A11KSA_SYMBOLS if provider == "a11ksa" else DEFAULT_QUANTEX_SYMBOLS if provider in ("quantex", "otcharts", "quotexapi") else DEFAULT_SYMBOLS
         raw = legacy or ",".join(defaults)
     symbols: list[str] = []
     seen: set[str] = set()
@@ -110,7 +112,7 @@ def get_watchlist() -> dict[str, Any]:
         "scanned": snapshots,
         "refresh_interval_seconds": refresh_interval_seconds(),
         "estimated_minutes_per_symbol": round(len(symbols) * refresh_interval_seconds() / 60, 1),
-        "note": ("OTCharts free tier: manual refresh only to protect the 200-request first-month allowance; no live stream." if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "otcharts" else "One symbol is fetched per interval. Provider is third-party; ensure your plan supports the requested market and endpoints."),
+        "note": ("OTCharts free tier: manual refresh only to protect the 200-request first-month allowance; no live stream." if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "otcharts" else "A11KSA is manual-refresh only and uses a fail-closed demo/read-only adapter." if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa" else "One symbol is fetched per interval. Provider is third-party; ensure your plan supports the requested market and endpoints."),
     }
 
 
@@ -128,9 +130,28 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
             _next_symbol_index = (_next_symbol_index + 1) % len(symbols)
 
     try:
-        candles = get_candles(selected, TIMEFRAME_SECONDS, CANDLE_LIMIT)
+        provider = os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower()
+        timeframe_seconds = 60 if provider == "a11ksa" else TIMEFRAME_SECONDS
+        candles = get_candles(selected, timeframe_seconds, CANDLE_LIMIT)
         if not candles:
             raise MarketDataError("Provider returned zero candles.")
+        if provider == "a11ksa":
+            latest = candles[-1]
+            now = datetime.now(timezone.utc)
+            snapshot = {
+                "available": True, "source": data_source_label(),
+                "market_type": "Quotex demo OTC (read-only)", "symbol": selected,
+                "watchlist": symbols, "timeframe_seconds": 60, "count": len(candles),
+                "updated_at": now.isoformat(), "latest_candle": latest,
+                "recent_candles": candles[-10:],
+                "chart": {"candles": [{k: row[k] for k in ("time", "open", "high", "low", "close")} for row in candles]},
+                "read_only": True, "demo_only": True,
+                "message": "A11KSA candle data fetched; analysis and notifications are disabled.",
+                "telegram_configured": False,
+            }
+            with _lock:
+                _snapshots[selected] = snapshot
+            return dict(snapshot)
         analysis = analyze_candles(candles)
         latest = candles[-1]
         record = record_signal(selected, TIMEFRAME_SECONDS, latest, analysis)
@@ -169,7 +190,7 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
         with _lock:
             _snapshots[selected] = snapshot
         return dict(snapshot)
-    except (MarketDataError, ValueError, TypeError) as exc:
+    except (MarketDataError, ValueError, TypeError, RuntimeError) as exc:
         error_snapshot = {
             "available": False,
             "source": data_source_label(),
@@ -193,7 +214,7 @@ async def scheduled_refresh_loop() -> None:
         with _lock:
             enabled = _bot_enabled
         provider = os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower()
-        if enabled and provider != "otcharts":
+        if enabled and provider not in ("otcharts", "a11ksa"):
             await asyncio.to_thread(refresh_snapshot)
             await asyncio.sleep(refresh_interval_seconds())
         else:
