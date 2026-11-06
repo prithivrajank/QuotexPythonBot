@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from data_collector import MarketDataError, connection_status, data_source_label, get_assets, get_candles
 from runtime import bot_status, get_snapshot, get_watchlist, refresh_snapshot, scheduled_refresh_loop, set_bot_enabled
@@ -36,11 +36,15 @@ def health():
 
 @app.get("/api/bot")
 def bot_state():
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        return {"enabled": False, "message": "Automatic bot mode is disabled for A11KSA candle-only mode."}
     return bot_status()
 
 
 @app.post("/api/bot/{action}")
 def bot_control(action: str):
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        raise HTTPException(status_code=404, detail="Bot controls are disabled for A11KSA candle-only mode.")
     if action not in {"on", "off"}:
         raise HTTPException(status_code=422, detail="Action must be on or off")
     return set_bot_enabled(action == "on")
@@ -69,7 +73,7 @@ let symbols=[];
 function showSnapshot(d){if(!d||!d.available){$('pairStatus').textContent=d?.message||'No cached snapshot for this pair yet.';return}
 const c=d.latest_candle||{};$('open').textContent=fmt(c.open);$('high').textContent=fmt(c.high);$('low').textContent=fmt(c.low);$('close').textContent=fmt(c.close);
 $('candleInfo').textContent='Symbol: '+(d.symbol||'—')+' · '+(d.timeframe_seconds||60)+'s candle · '+(c.market_type||d.market_type||'provider-specific')+' · Candle time: '+(c.time?new Date(c.time*1000).toLocaleString():'—')+' · Snapshot fetched: '+(d.updated_at||'—');
-const n=d.telegram_notification||{};const notifyText=n.sent?'Telegram: message sent.':n.reason==='duplicate_candle'?'Telegram: this candle was already notified.':n.reason==='telegram_not_configured'?'Telegram: credentials missing on server.':n.reason==='telegram_rejected_message'?'Telegram rejected the message (API error '+(n.error_code||'unknown')+').':n.reason==='telegram_delivery_failed'?'Telegram delivery failed; check token, chat ID and Render logs.': 'Telegram: '+(n.reason||'no notification status returned')+'.';$('pairStatus').textContent=(d.source||'Provider')+' · '+(d.count||0)+' candles available. '+notifyText;
+$('pairStatus').textContent=(d.source||'Provider')+' · '+(d.count||0)+' candles available. Read-only display; no signal analysis or alerts.'
 const rows=(d.recent_candles||[]).slice().reverse().map(x=>'<tr><td>'+new Date(x.time*1000).toLocaleString()+'</td><td>'+fmt(x.open)+'</td><td>'+fmt(x.high)+'</td><td>'+fmt(x.low)+'</td><td class="price">'+fmt(x.close)+'</td></tr>').join('');
 $('candles').innerHTML=rows||'<tr><td colspan="5">No candle history.</td></tr>';}
 async function loadStatus(){try{const r=await fetch('/api/status',{cache:'no-store'}),d=await r.json();$('provider').textContent=d.source||'Unknown';$('marketType').textContent=d.market_type||'Provider-specific';$('connection').textContent=d.connected?'Connected':(d.streaming_available?'Stream configured':'Status reported by provider');$('statusMessage').textContent=d.message||'Provider status loaded. Check provider-specific availability before relying on data.';}catch(e){$('statusMessage').textContent='Status unavailable: '+e.message;}}
@@ -206,7 +210,9 @@ def analysis(
     timeframe_seconds: int = Query(60, ge=1),
     limit: int = Query(100, ge=30, le=5000),
 ):
-    """Direct one-off analysis; makes one provider candle request."""
+    """Direct one-off analysis; disabled for the A11KSA demo candle-only mode."""
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        raise HTTPException(status_code=404, detail="Analysis is disabled for A11KSA candle-only mode.")
     _validate_timeframe(timeframe_seconds)
     try:
         result = get_candles(asset, timeframe_seconds, limit)
@@ -261,6 +267,8 @@ async def refresh(asset: str | None = Query(None, min_length=3, max_length=40)):
 
 @app.get("/api/history")
 def history(limit: int = Query(50, ge=1, le=200)):
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        raise HTTPException(status_code=404, detail="Signal history is disabled for A11KSA candle-only mode.")
     return {
         "summary": history_summary(),
         "records": get_history(limit),
@@ -271,6 +279,8 @@ def history(limit: int = Query(50, ge=1, le=200)):
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        return RedirectResponse(url="/market", status_code=307)
     return """<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Quotex Demo Live Data & Signal Bot</title><script src='https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js'></script><style>
 *{box-sizing:border-box}body{font-family:system-ui,-apple-system,sans-serif;max-width:1180px;margin:28px auto;padding:0 16px;background:#10131a;color:#f3f4f6}section{background:#1c2230;border-radius:14px;padding:20px;margin:14px 0;overflow:hidden}small,.muted{color:#b6c0d1}.warn{color:#ffcc80}.signal{font-size:1.5rem;font-weight:750}button{background:#7c9cff;color:#10131a;border:0;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer}button:disabled{opacity:.55}table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:.88rem}th,td{text-align:right;padding:8px;border-bottom:1px solid #3a4355;white-space:nowrap}th:first-child,td:first-child{text-align:left}.tablewrap{overflow-x:auto}.chart{height:340px;width:100%}.macdchart{height:170px;width:100%}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}.metric{background:#121722;border-radius:10px;padding:12px}.metric strong{display:block;font-size:1.05rem;margin-top:4px}.pill{display:inline-block;background:#303b52;padding:4px 8px;border-radius:999px;font-size:.8rem}.history-good{color:#73d6ae}.history-bad{color:#ff8c8c}@media(max-width:600px){.chart{height:290px}section{padding:14px}}
 </style></head><body>
