@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from a11ksa_candle_transport import (
@@ -19,7 +21,7 @@ def test_authorization_frame_rejects_missing_session():
 def test_authorization_response_requires_explicit_demo_confirmation():
     body = {"isDemo": 1, "userId": 123}
     assert parse_authorization_response(
-        '42["s_authorization",' + __import__("json").dumps(body) + "]"
+        '42["s_authorization",' + json.dumps(body) + "]"
     ) == body
 
 
