@@ -90,7 +90,7 @@ def get_snapshot(symbol: str | None = None) -> dict[str, Any]:
     return {
         "available": False,
         "source": data_source_label(),
-        "market_type": "Quotex market" if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() in ("quantex", "otcharts", "quotexapi") else "standard forex, not Quotex OTC",
+        "market_type": "Quotex demo OTC (read-only)" if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa" else "Quotex market" if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() in ("quantex", "otcharts", "quotexapi") else "standard forex, not Quotex OTC",
         "message": "Waiting for the first scheduled refresh.",
         "watchlist": configured_symbols(),
     }
@@ -201,7 +201,7 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
             "message": str(exc),
             "refresh_interval_seconds": refresh_interval_seconds(),
             "estimated_minutes_per_symbol": round(len(symbols) * refresh_interval_seconds() / 60, 1),
-            "telegram_configured": bool(os.getenv("TELEGRAM_BOT_TOKEN", "").strip() and os.getenv("TELEGRAM_CHAT_ID", "").strip()),
+            "telegram_configured": False if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa" else bool(os.getenv("TELEGRAM_BOT_TOKEN", "").strip() and os.getenv("TELEGRAM_CHAT_ID", "").strip()),
         }
         with _lock:
             _snapshots[selected] = error_snapshot
