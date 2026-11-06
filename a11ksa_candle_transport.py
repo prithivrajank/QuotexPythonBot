@@ -327,9 +327,6 @@ class ReadOnlyCandleTransport:
                         break
                     elif isinstance(msg, str) and msg.startswith("451-["):
                         raise CandleTransportError("Unexpected multipart frame during authorization.")
-                    elif isinstance(msg, str) and msg.startswith("42"):
-                        # Any non-success Socket.IO event is parsed and rejected.
-                        parse_authorization_response(msg)
                 if not authenticated:
                     raise CandleTransportError("Demo authorization was not confirmed.")
                 await ws.send(follow)
