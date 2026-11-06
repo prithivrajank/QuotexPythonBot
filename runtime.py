@@ -107,7 +107,7 @@ def get_watchlist() -> dict[str, Any]:
     symbols = configured_symbols()
     return {
         "source": data_source_label(),
-        "market_type": "Quotex market" if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() in ("quantex", "otcharts", "quotexapi") else "standard forex, not Quotex OTC",
+        "market_type": "Quotex demo OTC (read-only)" if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa" else "Quotex market" if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() in ("quantex", "otcharts", "quotexapi") else "standard forex, not Quotex OTC",
         "symbols": symbols,
         "scanned": snapshots,
         "refresh_interval_seconds": refresh_interval_seconds(),
