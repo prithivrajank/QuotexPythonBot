@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import inspect
 import math
 import os
 import ssl
@@ -249,19 +250,23 @@ class ReadOnlyCandleTransport:
         context = build_tls_context()
         received: list[dict[str, Any]] = []
         try:
-            async with websockets.connect(
-                self.endpoint,
-                ssl=context,
-                open_timeout=self.timeout,
-                close_timeout=5,
-                ping_interval=20,
-                ping_timeout=10,
-                extra_headers={
-                    "Origin": "https://quotex.com",
-                    "Referer": "https://quotex.com/",
-                    "User-Agent": "Mozilla/5.0",
-                },
-            ) as ws:
+            headers = {
+                "Origin": "https://quotex.com",
+                "Referer": "https://quotex.com/",
+                "User-Agent": "Mozilla/5.0",
+            }
+            # websockets 14+ renamed extra_headers to additional_headers.
+            connect_parameters = inspect.signature(websockets.connect).parameters
+            header_argument = "additional_headers" if "additional_headers" in connect_parameters else "extra_headers"
+            connect_options = {
+                "ssl": context,
+                "open_timeout": self.timeout,
+                "close_timeout": 5,
+                "ping_interval": 20,
+                "ping_timeout": 10,
+                header_argument: headers,
+            }
+            async with websockets.connect(self.endpoint, **connect_options) as ws:
                 self._ws = ws
                 first = await asyncio.wait_for(ws.recv(), timeout=self.timeout)
                 if not isinstance(first, str) or not first.startswith("0"):
