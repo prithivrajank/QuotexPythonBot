@@ -246,12 +246,25 @@ def parse_candle_event(frame: str | bytes, expected_asset: str) -> list[dict[str
             timestamp_value = float(row[0])
             open_price = float(row[1])
             # Six-field upstream rows use [ts, open, low, high, close, volume].
-            # The seven-field fixture format uses [ts, open, close, high, low,
-            # tick_count, last_update]. Keep the layouts explicitly separate.
+            # Seven-field captured fixtures have appeared in both OHLC orderings:
+            # [ts, open, low, high, close, tick_count, last_update] and
+            # [ts, open, close, high, low, tick_count, last_update].
+            # Resolve only when exactly one candidate satisfies OHLC invariants.
             if len(row) > 6:
-                close_price = float(row[2])
-                high_price = float(row[3])
-                low_price = float(row[4])
+                second, third, fourth = float(row[2]), float(row[3]), float(row[4])
+                candidates = [
+                    (second, third, fourth),  # low, high, close
+                    (fourth, third, second),  # low, high, close from close, high, low
+                ]
+                valid = [
+                    (low, high, close)
+                    for low, high, close in candidates
+                    if high >= max(open_price, close, low)
+                    and low <= min(open_price, close, high)
+                ]
+                if len(valid) != 1:
+                    continue
+                low_price, high_price, close_price = valid[0]
             else:
                 low_price = float(row[2])
                 high_price = float(row[3])
