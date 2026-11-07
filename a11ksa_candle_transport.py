@@ -248,13 +248,30 @@ def parse_candle_event(frame: str | bytes, expected_asset: str) -> list[dict[str
             low_price = float(row[2])
             high_price = float(row[3])
             close_price = float(row[4])
-            volume = float(row[5]) if len(row) > 5 and row[5] is not None else 0.0
-
-            values = (timestamp_value, open_price, low_price, high_price, close_price, volume)
+            # Two observed row layouts are supported:
+            # 6 fields: [ts, open, low, high, close, volume]
+            # 7 fields: [ts, open, low, high, close, tick_count, last_update]
+            values = (timestamp_value, open_price, low_price, high_price, close_price)
             if not all(math.isfinite(value) for value in values):
                 continue
-            if timestamp_value <= 0 or volume < 0:
+            if timestamp_value <= 0:
                 continue
+            if len(row) > 6:
+                tick_count_value = float(row[5])
+                last_update = float(row[6])
+                if (
+                    not math.isfinite(tick_count_value)
+                    or not math.isfinite(last_update)
+                    or tick_count_value < 0
+                    or int(tick_count_value) != tick_count_value
+                    or last_update < timestamp_value
+                ):
+                    continue
+                tick_count = int(tick_count_value)
+            else:
+                volume = float(row[5]) if len(row) > 5 and row[5] is not None else 0.0
+                if not math.isfinite(volume) or volume < 0:
+                    continue
             timestamp = int(timestamp_value)
             if timestamp % 60 != 0:
                 continue
@@ -265,14 +282,18 @@ def parse_candle_event(frame: str | bytes, expected_asset: str) -> list[dict[str
         except (TypeError, ValueError, OverflowError):
             continue
 
-        parsed[timestamp] = {
+        candle = {
             "time": timestamp,
             "open": open_price,
             "high": high_price,
             "low": low_price,
             "close": close_price,
-            "volume": volume,
         }
+        if len(row) > 6:
+            candle.update({"tick_count": tick_count, "last_update": last_update})
+        else:
+            candle["volume"] = volume
+        parsed[timestamp] = candle
     return [parsed[timestamp] for timestamp in sorted(parsed)]
 
 class ReadOnlyCandleTransport:
