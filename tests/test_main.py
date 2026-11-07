@@ -39,3 +39,10 @@ def test_a11ksa_candles_security_gate_returns_controlled_502(monkeypatch):
         main.candles(asset="EURUSD_otc", timeframe_seconds=60, limit=100)
     assert exc.value.status_code == 502
     assert "disabled" in exc.value.detail.lower()
+
+
+def test_a11ksa_market_dashboard_labels_disabled_connection(monkeypatch):
+    monkeypatch.setenv("MARKET_DATA_PROVIDER", "a11ksa")
+    html = main.market_data_dashboard()
+    assert "Disabled — demo verification pending" in html
+    assert "Status reported by provider" not in html
