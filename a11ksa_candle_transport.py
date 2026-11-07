@@ -245,12 +245,17 @@ def parse_candle_event(frame: str | bytes, expected_asset: str) -> list[dict[str
                 continue
             timestamp_value = float(row[0])
             open_price = float(row[1])
-            low_price = float(row[2])
-            high_price = float(row[3])
-            close_price = float(row[4])
-            # Two observed row layouts are supported:
-            # 6 fields: [ts, open, low, high, close, volume]
-            # 7 fields: [ts, open, low, high, close, tick_count, last_update]
+            # Six-field upstream rows use [ts, open, low, high, close, volume].
+            # The seven-field fixture format uses [ts, open, close, high, low,
+            # tick_count, last_update]. Keep the layouts explicitly separate.
+            if len(row) > 6:
+                close_price = float(row[2])
+                high_price = float(row[3])
+                low_price = float(row[4])
+            else:
+                low_price = float(row[2])
+                high_price = float(row[3])
+                close_price = float(row[4])
             values = (timestamp_value, open_price, low_price, high_price, close_price)
             if not all(math.isfinite(value) for value in values):
                 continue
