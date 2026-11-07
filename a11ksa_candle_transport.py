@@ -201,10 +201,12 @@ def aggregate_ticks_to_candles(
 
 
 def parse_candle_event(frame: str | bytes, expected_asset: str) -> list[dict[str, Any]]:
-    """Parse verified 60-second candle arrays; ignore tick history and placeholders.
+    """Parse upstream candle payloads for the requested symbol and 60-second period.
 
-    Observed candle row:
-    [timestamp, open, close, high, low, tick_count, last_update_timestamp]
+    The inspected A11KSA client documents candle rows as:
+    [timestamp_seconds, open, low, high, close, volume?]
+    Payloads may use either the "candles" or "history" list key. Binary
+    attachments are Engine.IO text containing an EOT prefix followed by JSON.
     """
     body: Any = None
     if isinstance(frame, str) and frame.startswith("42"):
@@ -222,24 +224,38 @@ def parse_candle_event(frame: str | bytes, expected_asset: str) -> list[dict[str
 
     if not isinstance(body, dict):
         return []
-    if body.get("asset") != expected_asset or body.get("period") != 60:
+    if body.get("asset") != expected_asset:
         return []
+    try:
+        if int(body.get("period", -1)) != 60:
+            return []
+    except (TypeError, ValueError, OverflowError):
+        return []
+
     rows = body.get("candles")
+    if rows is None:
+        rows = body.get("history")
     if not isinstance(rows, list):
         return []
 
     parsed: dict[int, dict[str, Any]] = {}
     for row in rows:
         try:
-            if not isinstance(row, (list, tuple)) or len(row) < 7:
+            if not isinstance(row, (list, tuple)) or len(row) < 5:
                 continue
-            timestamp = int(float(row[0]))
-            open_price, close_price, high_price, low_price = map(float, row[1:5])
-            tick_count = int(row[5])
-            last_update = float(row[6])
-            values = (open_price, close_price, high_price, low_price, last_update)
-            if timestamp <= 0 or tick_count < 0 or not all(math.isfinite(v) for v in values):
+            timestamp_value = float(row[0])
+            open_price = float(row[1])
+            low_price = float(row[2])
+            high_price = float(row[3])
+            close_price = float(row[4])
+            volume = float(row[5]) if len(row) > 5 and row[5] is not None else 0.0
+
+            values = (timestamp_value, open_price, low_price, high_price, close_price, volume)
+            if not all(math.isfinite(value) for value in values):
                 continue
+            if timestamp_value <= 0 or volume < 0:
+                continue
+            timestamp = int(timestamp_value)
             if timestamp % 60 != 0:
                 continue
             if high_price < max(open_price, close_price, low_price):
@@ -248,17 +264,16 @@ def parse_candle_event(frame: str | bytes, expected_asset: str) -> list[dict[str
                 continue
         except (TypeError, ValueError, OverflowError):
             continue
+
         parsed[timestamp] = {
             "time": timestamp,
             "open": open_price,
             "high": high_price,
             "low": low_price,
             "close": close_price,
-            "tick_count": tick_count,
-            "last_update": last_update,
+            "volume": volume,
         }
-    return [parsed[t] for t in sorted(parsed)]
-
+    return [parsed[timestamp] for timestamp in sorted(parsed)]
 
 class ReadOnlyCandleTransport:
     """Single-session candle reader; no trading/account methods are implemented."""
