@@ -1,0 +1,433 @@
+"""Minimal fail-closed, read-only Quotex candle transport.
+
+This deliberately does not import A11ksa's high-level client. It supports only
+Engine.IO/Socket.IO handshake, authorization, and candle subscription events.
+No balance, order, trade, or account-management API exists in this module.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import inspect
+import math
+import os
+import ssl
+from typing import Any
+from urllib.parse import urlsplit
+
+import websockets
+
+DEFAULT_ENDPOINT = "wss://ws2.quotex.com/socket.io/?EIO=3&transport=websocket"
+ALLOWED_OUTBOUND_EVENTS = frozenset({
+    "instruments/follow",
+    "instruments/update",
+    "chart_notification/get",
+})
+FORBIDDEN_EVENT_FRAGMENTS = ("balance", "order", "trade", "buy", "sell", "deal")
+
+
+class CandleTransportError(RuntimeError):
+    pass
+
+
+def build_tls_context() -> ssl.SSLContext:
+    context = ssl.create_default_context()
+    context.check_hostname = True
+    context.verify_mode = ssl.CERT_REQUIRED
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    return context
+
+
+def _validate_endpoint(endpoint: str) -> None:
+    parsed = urlsplit(endpoint)
+    if parsed.scheme != "wss" or not parsed.hostname:
+        raise CandleTransportError("Only a valid wss:// endpoint is permitted.")
+    if parsed.hostname != "ws2.quotex.com":
+        raise CandleTransportError("Endpoint host is not the reviewed Quotex host.")
+
+
+def _event_frame(event: str, payload: Any) -> str:
+    if event not in ALLOWED_OUTBOUND_EVENTS:
+        raise CandleTransportError(f"Outbound event is not allowlisted: {event}")
+    if any(fragment in event.lower() for fragment in FORBIDDEN_EVENT_FRAGMENTS):
+        raise CandleTransportError("Forbidden account/trading event.")
+    return "42" + json.dumps([event, payload], separators=(",", ":"))
+
+
+def build_authorization_frame(ssid: str) -> str:
+    """Return the raw SSID frame used by the inspected upstream client.
+
+    The upstream implementation sends the session identifier directly after
+    the Socket.IO '40' acknowledgement; it does not send a JSON authorization
+    event. The caller must supply a separately provisioned demo session.
+    """
+    if not isinstance(ssid, str) or not ssid.strip():
+        raise CandleTransportError("QUOTEX_DEMO_SSID is not configured.")
+    return ssid.strip()
+
+
+def parse_authorization_response(frame: str) -> dict[str, Any]:
+    """Accept only a structured s_authorization response with explicit demo proof.
+
+    A successful auth event alone does not prove that the session is a demo
+    account. Fail closed unless the response body explicitly identifies demo
+    mode. The exact upstream response schema still requires live verification.
+    """
+    if not isinstance(frame, str) or not frame.startswith("42"):
+        raise CandleTransportError("Unexpected authorization response frame.")
+    try:
+        packet = json.loads(frame[2:])
+    except (TypeError, ValueError):
+        raise CandleTransportError("Malformed authorization response.") from None
+    if not isinstance(packet, list) or len(packet) < 2:
+        raise CandleTransportError("Malformed authorization response packet.")
+    event, body = packet[0], packet[1]
+    if event in {"authorization/reject", "error"}:
+        raise CandleTransportError("Demo authorization was rejected.")
+    if event != "s_authorization" or not isinstance(body, dict):
+        raise CandleTransportError("Demo authorization was not confirmed.")
+    demo_value = next(
+        (body[key] for key in ("isDemo", "is_demo", "demo") if key in body),
+        None,
+    )
+    if demo_value not in (True, 1, "1", "true", "True", "demo", "DEMO"):
+        raise CandleTransportError(
+            "Authorization succeeded but the server did not explicitly confirm demo mode."
+        )
+    return body
+
+
+def build_candle_frames(asset: str, timeframe_seconds: int = 60) -> tuple[str, str, str]:
+    if not isinstance(asset, str) or not asset.strip():
+        raise CandleTransportError("Asset must be a non-empty symbol.")
+    symbol = asset.strip()
+    if timeframe_seconds != 60:
+        raise CandleTransportError("Only 60-second candles are enabled.")
+    return (
+        _event_frame("instruments/follow", symbol),
+        _event_frame("instruments/update", {"asset": symbol, "period": 60}),
+        _event_frame("chart_notification/get", {"asset": symbol, "version": "1.0.0"}),
+    )
+
+
+def _decode_binary_history(frame: str | bytes) -> dict[str, Any] | None:
+    """Decode the observed binary attachment: EOT byte followed by UTF-8 JSON."""
+    if isinstance(frame, bytes):
+        raw = frame
+    elif isinstance(frame, str):
+        raw = frame.encode("utf-8")
+    else:
+        return None
+    raw = raw.lstrip(b"\x04 \t\r\n")
+    try:
+        body = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, TypeError, ValueError):
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def parse_quote_event(frame: str | bytes, expected_asset: str) -> list[dict[str, Any]]:
+    """Parse observed quotes/stream binary attachments.
+
+    Observed row: [asset, timestamp_seconds, price, flag].
+    The flag is preserved without assigning undocumented semantics.
+    """
+    if isinstance(frame, bytes):
+        raw = frame.lstrip(b"\x04 \t\r\n")
+    elif isinstance(frame, str):
+        raw = frame.encode("utf-8").lstrip(b"\x04 \t\r\n")
+    else:
+        return []
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, TypeError, ValueError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    ticks: list[dict[str, Any]] = []
+    for row in payload:
+        if not isinstance(row, (list, tuple)) or len(row) < 4:
+            continue
+        asset, timestamp, price, flag = row[:4]
+        if asset != expected_asset:
+            continue
+        try:
+            timestamp = float(timestamp)
+            price = float(price)
+            if not math.isfinite(timestamp) or not math.isfinite(price) or timestamp <= 0:
+                continue
+        except (TypeError, ValueError, OverflowError):
+            continue
+        ticks.append({
+            "asset": asset,
+            "timestamp": timestamp,
+            "price": price,
+            "flag": flag,
+        })
+    return sorted(ticks, key=lambda tick: tick["timestamp"])
+
+
+def aggregate_ticks_to_candles(
+    ticks: list[dict[str, Any]], expected_asset: str
+) -> list[dict[str, Any]]:
+    """Build UTC-aligned 60-second OHLC candles from validated quote ticks."""
+    buckets: dict[int, list[dict[str, Any]]] = {}
+    for tick in ticks:
+        if tick.get("asset") != expected_asset:
+            continue
+        try:
+            timestamp = float(tick["timestamp"])
+            price = float(tick["price"])
+            if not math.isfinite(timestamp) or not math.isfinite(price) or timestamp <= 0:
+                continue
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        minute = int(timestamp // 60) * 60
+        buckets.setdefault(minute, []).append({"timestamp": timestamp, "price": price})
+    candles = []
+    for minute, rows in sorted(buckets.items()):
+        rows.sort(key=lambda row: row["timestamp"])
+        prices = [row["price"] for row in rows]
+        candles.append({
+            "time": minute,
+            "open": prices[0],
+            "high": max(prices),
+            "low": min(prices),
+            "close": prices[-1],
+            "tick_count": len(prices),
+            "last_update": rows[-1]["timestamp"],
+        })
+    return candles
+
+
+def parse_candle_event(frame: str | bytes, expected_asset: str) -> list[dict[str, Any]]:
+    """Parse upstream candle payloads for the requested symbol and 60-second period.
+
+    The inspected A11KSA client documents candle rows as:
+    [timestamp_seconds, open, low, high, close, volume?]
+    Payloads may use either the "candles" or "history" list key. Binary
+    attachments are Engine.IO text containing an EOT prefix followed by JSON.
+    """
+    body: Any = None
+    if isinstance(frame, str) and frame.startswith("42"):
+        try:
+            packet = json.loads(frame[2:])
+        except (TypeError, ValueError):
+            return []
+        if not isinstance(packet, list) or len(packet) < 2:
+            return []
+        event, body = packet[0], packet[1]
+        if event not in {"history/list/v2", "chart_notification/get", "loadHistoryPeriod"}:
+            return []
+    else:
+        body = _decode_binary_history(frame)
+
+    if not isinstance(body, dict):
+        return []
+    if body.get("asset") != expected_asset:
+        return []
+    try:
+        if int(body.get("period", -1)) != 60:
+            return []
+    except (TypeError, ValueError, OverflowError):
+        return []
+
+    rows = body.get("candles")
+    if rows is None:
+        rows = body.get("history")
+    if not isinstance(rows, list):
+        return []
+
+    parsed: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        try:
+            if not isinstance(row, (list, tuple)) or len(row) < 5:
+                continue
+            timestamp_value = float(row[0])
+            open_price = float(row[1])
+            # Six-field upstream rows use [ts, open, low, high, close, volume].
+            # Seven-field captured fixtures have appeared in both OHLC orderings:
+            # [ts, open, low, high, close, tick_count, last_update] and
+            # [ts, open, close, high, low, tick_count, last_update].
+            # Resolve only when exactly one candidate satisfies OHLC invariants.
+            if len(row) > 6:
+                second, third, fourth = float(row[2]), float(row[3]), float(row[4])
+                candidates = [
+                    (second, third, fourth),  # low, high, close
+                    (fourth, third, second),  # low, high, close from close, high, low
+                ]
+                valid = {
+                    (low, high, close)
+                    for low, high, close in candidates
+                    if high >= max(open_price, close, low)
+                    and low <= min(open_price, close, high)
+                }
+                # If both layouts are valid but normalize to identical OHLC,
+                # the row is unambiguous in value and can be accepted safely.
+                # If they produce different OHLC values, reject rather than guess.
+                if len(valid) != 1:
+                    continue
+                low_price, high_price, close_price = next(iter(valid))
+            else:
+                low_price = float(row[2])
+                high_price = float(row[3])
+                close_price = float(row[4])
+            values = (timestamp_value, open_price, low_price, high_price, close_price)
+            if not all(math.isfinite(value) for value in values):
+                continue
+            if timestamp_value <= 0:
+                continue
+            if len(row) > 6:
+                tick_count_value = float(row[5])
+                last_update = float(row[6])
+                if (
+                    not math.isfinite(tick_count_value)
+                    or not math.isfinite(last_update)
+                    or tick_count_value < 0
+                    or int(tick_count_value) != tick_count_value
+                    or last_update < timestamp_value
+                ):
+                    continue
+                tick_count = int(tick_count_value)
+            else:
+                volume = float(row[5]) if len(row) > 5 and row[5] is not None else 0.0
+                if not math.isfinite(volume) or volume < 0:
+                    continue
+            timestamp = int(timestamp_value)
+            if timestamp % 60 != 0:
+                continue
+            if high_price < max(open_price, close_price, low_price):
+                continue
+            if low_price > min(open_price, close_price, high_price):
+                continue
+        except (TypeError, ValueError, OverflowError):
+            continue
+
+        candle = {
+            "time": timestamp,
+            "open": open_price,
+            "high": high_price,
+            "low": low_price,
+            "close": close_price,
+        }
+        if len(row) > 6:
+            candle.update({"tick_count": tick_count, "last_update": last_update})
+        else:
+            candle["volume"] = volume
+        parsed[timestamp] = candle
+    return [parsed[timestamp] for timestamp in sorted(parsed)]
+
+class ReadOnlyCandleTransport:
+    """Single-session candle reader; no trading/account methods are implemented."""
+
+    def __init__(self, endpoint: str = DEFAULT_ENDPOINT, timeout: float = 12.0):
+        _validate_endpoint(endpoint)
+        self.endpoint = endpoint
+        self.timeout = timeout
+        self._ws = None
+
+    async def fetch_candles(self, asset: str, limit: int = 100) -> list[dict[str, Any]]:
+        if not 1 <= int(limit) <= 500:
+            raise CandleTransportError("limit must be between 1 and 500.")
+        ssid = os.getenv("QUOTEX_DEMO_SSID", "").strip()
+        if not ssid:
+            raise CandleTransportError("QUOTEX_DEMO_SSID is not configured in the private environment.")
+        auth_frame = build_authorization_frame(ssid)
+        follow, update, chart = build_candle_frames(asset, 60)
+        context = build_tls_context()
+        received: list[dict[str, Any]] = []
+        try:
+            headers = {
+                "Origin": "https://quotex.com",
+                "Referer": "https://quotex.com/",
+                "User-Agent": "Mozilla/5.0",
+            }
+            # websockets 14+ renamed extra_headers to additional_headers.
+            connect_parameters = inspect.signature(websockets.connect).parameters
+            header_argument = "additional_headers" if "additional_headers" in connect_parameters else "extra_headers"
+            connect_options = {
+                "ssl": context,
+                "open_timeout": self.timeout,
+                "close_timeout": 5,
+                "ping_interval": 20,
+                "ping_timeout": 10,
+                header_argument: headers,
+            }
+            async with websockets.connect(self.endpoint, **connect_options) as ws:
+                self._ws = ws
+                first = await asyncio.wait_for(ws.recv(), timeout=self.timeout)
+                if not isinstance(first, str) or not first.startswith("0"):
+                    raise CandleTransportError("Unexpected Engine.IO opening frame.")
+                await ws.send("40")
+                connected = False
+                deadline = asyncio.get_running_loop().time() + self.timeout
+                while asyncio.get_running_loop().time() < deadline:
+                    msg = await asyncio.wait_for(ws.recv(), timeout=self.timeout)
+                    if msg == "2":
+                        await ws.send("3")
+                    elif isinstance(msg, str) and msg.startswith("40"):
+                        connected = True
+                        break
+                if not connected:
+                    raise CandleTransportError("Socket.IO connect acknowledgement timed out.")
+                await ws.send(auth_frame)
+                authenticated = False
+                deadline = asyncio.get_running_loop().time() + self.timeout
+                while asyncio.get_running_loop().time() < deadline:
+                    msg = await asyncio.wait_for(ws.recv(), timeout=self.timeout)
+                    if msg == "2":
+                        await ws.send("3")
+                    elif isinstance(msg, str) and msg.startswith("42"):
+                        # Do not accept a prefix-only auth acknowledgement.
+                        parse_authorization_response(msg)
+                        authenticated = True
+                        break
+                    elif isinstance(msg, str) and msg.startswith("451-["):
+                        raise CandleTransportError("Unexpected multipart frame during authorization.")
+                if not authenticated:
+                    raise CandleTransportError("Demo authorization was not confirmed.")
+                await ws.send(follow)
+                await ws.send(update)
+                await ws.send(chart)
+                deadline = asyncio.get_running_loop().time() + self.timeout
+                pending_binary = False
+                pending_event = ""
+                while asyncio.get_running_loop().time() < deadline and len(received) < limit:
+                    try:
+                        msg = await asyncio.wait_for(
+                            ws.recv(),
+                            timeout=max(0.1, deadline - asyncio.get_running_loop().time()),
+                        )
+                    except asyncio.TimeoutError:
+                        break
+                    if msg == "2":
+                        await ws.send("3")
+                    elif isinstance(msg, str) and msg.startswith("451-"):
+                        # Socket.IO binary event header; the following frame is its attachment.
+                        try:
+                            packet = json.loads(msg[4:])
+                            pending_event = packet[0] if isinstance(packet, list) and packet else ""
+                            pending_binary = (
+                                isinstance(packet, list)
+                                and len(packet) > 1
+                                and packet[0] in {"history/list/v2", "quotes/stream"}
+                                and isinstance(packet[1], dict)
+                                # The binary-event header contains a placeholder only.
+                                # Validate asset and period after decoding the attachment.
+                            )
+                        except (TypeError, ValueError):
+                            pending_binary = False
+                    elif pending_binary and isinstance(msg, bytes):
+                        # The attachment type is determined by the preceding Socket.IO event.
+                        if pending_event == "quotes/stream":
+                            ticks = parse_quote_event(msg, asset)
+                            received.extend(aggregate_ticks_to_candles(ticks, asset))
+                        else:
+                            received.extend(parse_candle_event(msg, asset))
+                        pending_binary = False
+                    elif isinstance(msg, str) and msg.startswith("42"):
+                        received.extend(parse_candle_event(msg, asset))
+                unique = {row["time"]: row for row in received}
+                return sorted(unique.values(), key=lambda row: row["time"])[-limit:]
+        finally:
+            self._ws = None

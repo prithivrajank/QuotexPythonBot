@@ -24,7 +24,7 @@ def _provider() -> str:
     return os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower()
 
 def data_source_label() -> str:
-    return ("ChipaDevTeam QuotexAPI WebSocket (unofficial)" if _provider() == "quotexapi" else "OTCharts third-party Quotex market-data API (not operated by Quotex)" if _provider() == "otcharts" else "QUANTEX third-party Quotex market-data API (not operated by Quotex)" if _provider() == "quantex" else SOURCE)
+    return ("A11KSA demo-only read-only candle adapter (TLS/protocol gate enabled)" if _provider() == "a11ksa" else "ChipaDevTeam QuotexAPI WebSocket (unofficial)" if _provider() == "quotexapi" else "OTCharts third-party Quotex market-data API (not operated by Quotex)" if _provider() == "otcharts" else "QUANTEX third-party Quotex market-data API (not operated by Quotex)" if _provider() == "quantex" else SOURCE)
 
 def _qx_request(path: str, params: dict[str, Any]) -> dict[str, Any]:
     key = os.getenv("QUANTEX_API_KEY", "").strip()
@@ -217,6 +217,9 @@ def _get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
 
 def connection_status() -> dict[str, Any]:
     """Validate the selected market-data provider."""
+    if _provider() == "a11ksa":
+        from a11ksa_provider import connection_status as a11ksa_connection_status
+        return a11ksa_connection_status()
     if _provider() == "quotexapi":
         from quotexapi_provider import connection_status
         return connection_status()
@@ -276,6 +279,9 @@ def connection_status() -> dict[str, Any]:
 
 def get_assets() -> list[dict[str, Any]]:
     """Fetch the selected provider's available pair catalogue."""
+    if _provider() == "a11ksa":
+        from a11ksa_provider import get_assets as a11ksa_assets
+        return a11ksa_assets()
     if _provider() == "quotexapi":
         from quotexapi_provider import get_assets as quotex_assets
         return quotex_assets()
@@ -327,6 +333,9 @@ def get_candles(
     """Fetch real standard-forex OHLC bars, oldest first; never fabricate candles."""
     if not isinstance(asset, str) or not asset.strip():
         raise ValueError("asset must not be empty")
+    if _provider() == "a11ksa":
+        from a11ksa_provider import get_candles as a11ksa_candles
+        return a11ksa_candles(asset, timeframe_seconds, limit)
     if _provider() == "quotexapi":
         from quotexapi_provider import get_candles as quotex_candles
         return quotex_candles(asset, timeframe_seconds, limit)

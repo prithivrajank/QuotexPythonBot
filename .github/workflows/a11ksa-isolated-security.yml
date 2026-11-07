@@ -1,0 +1,90 @@
+name: A11ksa isolated TLS security test
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "patch_a11ksa_tls.py"
+      - "tests/test_patch_a11ksa_tls.py"
+      - "tests/test_a11ksa_provider.py"
+      - "a11ksa_candle_transport.py"
+      - "tests/test_a11ksa_candle_transport.py"
+      - "scripts/verify_a11ksa_tls.py"
+      - "scripts/verify_quotex_websocket_handshake.py"
+      - "requirements-a11ksa-test.txt"
+      - ".github/workflows/a11ksa-isolated-security.yml"
+  push:
+    branches:
+      - feature/a11ksa-candle-only-test
+    paths:
+      - "patch_a11ksa_tls.py"
+      - "tests/test_patch_a11ksa_tls.py"
+      - "tests/test_a11ksa_provider.py"
+      - "a11ksa_candle_transport.py"
+      - "tests/test_a11ksa_candle_transport.py"
+      - "scripts/verify_a11ksa_tls.py"
+      - "scripts/verify_quotex_websocket_handshake.py"
+      - "requirements-a11ksa-test.txt"
+      - ".github/workflows/a11ksa-isolated-security.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-security-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out isolated test branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install exact reviewed A11ksa revision
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-a11ksa-test.txt
+          python -m pip install 'websockets==12.0' pytest
+
+      - name: Apply TLS patch to installed package
+        run: |
+          PACKAGE_FILE="$(python -c 'from importlib.metadata import distribution; print(distribution("api_quotex").locate_file("api_quotex/websocket_client.py"))')"
+          test -f "$PACKAGE_FILE"
+          python patch_a11ksa_tls.py "$PACKAGE_FILE"
+
+      - name: Verify installed TLS configuration
+        run: |
+          PACKAGE_FILE="$(python -c 'from importlib.metadata import distribution; print(distribution("api_quotex").locate_file("api_quotex/websocket_client.py"))')"
+          python - "$PACKAGE_FILE" <<'PY'
+          import pathlib, sys
+          source = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+          assert "ssl.create_default_context()" in source
+          assert "ssl_context.check_hostname = True" in source
+          assert "ssl_context.verify_mode = ssl.CERT_REQUIRED" in source
+          assert "ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2" in source
+          assert "ssl_context.verify_mode = ssl.CERT_NONE" not in source
+          assert "ssl_context.check_hostname = False" not in source
+          print("Installed package TLS configuration is verified.")
+          PY
+
+      - name: Verify DNS, TCP reachability, and TLS certificate/hostname
+        id: tls_check
+        run: python scripts/verify_a11ksa_tls.py
+
+      - name: Diagnose unauthenticated WebSocket and Engine.IO handshake
+        continue-on-error: true
+        run: python scripts/verify_quotex_websocket_handshake.py
+
+      # Run local tests even when the hosted runner cannot reach Quotex.
+      # The overall job still remains failed if the live TLS check fails.
+      - name: Run adapter and TLS patch unit tests
+        if: always() && steps.tls_check.outcome != 'cancelled'
+        run: python -m pytest -q tests/test_a11ksa_provider.py tests/test_patch_a11ksa_tls.py tests/test_a11ksa_candle_transport.py
+
+# Security note: this workflow intentionally performs no account login or session-authenticated request.

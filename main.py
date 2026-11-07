@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from data_collector import MarketDataError, connection_status, data_source_label, get_assets, get_candles
 from runtime import bot_status, get_snapshot, get_watchlist, refresh_snapshot, scheduled_refresh_loop, set_bot_enabled
@@ -36,11 +36,15 @@ def health():
 
 @app.get("/api/bot")
 def bot_state():
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        return {"enabled": False, "message": "Automatic bot mode is disabled for A11KSA candle-only mode."}
     return bot_status()
 
 
 @app.post("/api/bot/{action}")
 def bot_control(action: str):
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        raise HTTPException(status_code=404, detail="Bot controls are disabled for A11KSA candle-only mode.")
     if action not in {"on", "off"}:
         raise HTTPException(status_code=422, detail="Action must be on or off")
     return set_bot_enabled(action == "on")
@@ -55,24 +59,26 @@ def status():
 @app.get("/market", response_class=HTMLResponse)
 def market_data_dashboard():
     """Clean read-only market-data view; deliberately excludes the legacy signal UI."""
-    return """<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Read-only Market Data</title><style>
-*{box-sizing:border-box}body{font:15px system-ui,-apple-system,sans-serif;background:#10131a;color:#f3f4f6;margin:22px auto;padding:0 14px;max-width:1000px}section{background:#1c2230;padding:16px;border-radius:12px;margin:12px 0}.muted,small{color:#aab4c5}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.metric{background:#121722;padding:12px;border-radius:9px}.metric strong{display:block;margin-top:5px;overflow-wrap:anywhere}select,button{padding:10px;border-radius:8px;border:1px solid #46516a;background:#121722;color:#f3f4f6}button{background:#8da8ff;color:#10131a;font-weight:700;cursor:pointer}button:disabled{opacity:.55}.tablewrap{overflow-x:auto}table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}td,th{text-align:left;padding:9px;border-bottom:1px solid #39445a;white-space:nowrap}.price{font-weight:700}.pill{display:inline-block;background:#303b52;padding:5px 9px;border-radius:20px}
+    return """<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Read-only Market Data</title><script src='https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js'></script><style>
+*{box-sizing:border-box}body{font:15px system-ui,-apple-system,sans-serif;background:#10131a;color:#f3f4f6;margin:22px auto;padding:0 14px;max-width:1000px}section{background:#1c2230;padding:16px;border-radius:12px;margin:12px 0}.muted,small{color:#aab4c5}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.metric{background:#121722;padding:12px;border-radius:9px}.metric strong{display:block;margin-top:5px;overflow-wrap:anywhere}select,button{padding:10px;border-radius:8px;border:1px solid #46516a;background:#121722;color:#f3f4f6}button{background:#8da8ff;color:#10131a;font-weight:700;cursor:pointer}button:disabled{opacity:.55}.tablewrap{overflow-x:auto}table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}td,th{text-align:left;padding:9px;border-bottom:1px solid #39445a;white-space:nowrap}.price{font-weight:700}.chart{height:360px;width:100%}.pill{display:inline-block;background:#303b52;padding:5px 9px;border-radius:20px}
 </style></head><body><h1>Read-only Market Data</h1><p class='muted'>Multi-pair market snapshots · OTC and standard Forex are identified separately · no trading or signal recommendations</p>
 <section><div class='grid'><div class='metric'>Provider<strong id='provider'>Loading…</strong></div><div class='metric'>Market type<strong id='marketType'>Loading…</strong></div><div class='metric'>Connection<strong id='connection'>Checking…</strong></div></div><p id='statusMessage' class='muted'>Checking provider status…</p></section>
 <section><h2>Pair watchlist</h2><label for='pair'>Select pair </label> <select id='pair'><option>Loading pairs…</option></select> <button id='refresh'>Fetch latest candles (1 request)</button><p id='pairStatus' class='muted'>Snapshots are cached. Manual fetch may use provider quota.</p></section>
 <section><h2>Latest candle</h2><div class='grid'><div class='metric'>Open<strong id='open'>—</strong></div><div class='metric'>High<strong id='high'>—</strong></div><div class='metric'>Low<strong id='low'>—</strong></div><div class='metric'>Close<strong id='close'>—</strong></div></div><p id='candleInfo' class='muted'>No cached candle yet.</p></section>
+<section><h2>60-second candlestick chart</h2><div id='candleChart' class='chart'></div><p class='muted'>Read-only OHLC display · no indicators or signal calculations.</p></section>
 <section><h2>Recent candles</h2><div class='tablewrap'><table><thead><tr><th>Time (local)</th><th>Open</th><th>High</th><th>Low</th><th>Close</th></tr></thead><tbody id='candles'><tr><td colspan='5'>No cached candles yet. Choose a pair and fetch once.</td></tr></tbody></table></div></section>
 <section><h2>Observed quote ticks</h2><p id='tickStatus' class='muted'>Connecting to quote stream…</p><div class='tablewrap'><table><thead><tr><th>Symbol</th><th>Market</th><th>Price</th><th>Time (local)</th></tr></thead><tbody id='ticks'><tr><td colspan='4'>No verified quote events received.</td></tr></tbody></table></div><small>REST candle closes are never presented as live ticks. Tick rows appear only when the selected integration emits actual quote events.</small></section>
 <script>
 const $=id=>document.getElementById(id), fmt=v=>v===null||v===undefined||!Number.isFinite(Number(v))?'—':Number(v).toPrecision(9);
-let symbols=[];
+let symbols=[];let chart=null,candleSeries=null;
+if(window.LightweightCharts){chart=LightweightCharts.createChart($('candleChart'),{height:360,layout:{background:{color:'#1c2230'},textColor:'#d6deeb'},grid:{vertLines:{color:'#30384a'},horzLines:{color:'#30384a'}},timeScale:{timeVisible:true,secondsVisible:false}});candleSeries=chart.addCandlestickSeries({upColor:'#26a69a',downColor:'#ef5350',borderVisible:false,wickUpColor:'#26a69a',wickDownColor:'#ef5350'});window.addEventListener('resize',()=>chart.applyOptions({width:$('candleChart').clientWidth}));}
 function showSnapshot(d){if(!d||!d.available){$('pairStatus').textContent=d?.message||'No cached snapshot for this pair yet.';return}
 const c=d.latest_candle||{};$('open').textContent=fmt(c.open);$('high').textContent=fmt(c.high);$('low').textContent=fmt(c.low);$('close').textContent=fmt(c.close);
 $('candleInfo').textContent='Symbol: '+(d.symbol||'—')+' · '+(d.timeframe_seconds||60)+'s candle · '+(c.market_type||d.market_type||'provider-specific')+' · Candle time: '+(c.time?new Date(c.time*1000).toLocaleString():'—')+' · Snapshot fetched: '+(d.updated_at||'—');
-const n=d.telegram_notification||{};const notifyText=n.sent?'Telegram: message sent.':n.reason==='duplicate_candle'?'Telegram: this candle was already notified.':n.reason==='telegram_not_configured'?'Telegram: credentials missing on server.':n.reason==='telegram_rejected_message'?'Telegram rejected the message (API error '+(n.error_code||'unknown')+').':n.reason==='telegram_delivery_failed'?'Telegram delivery failed; check token, chat ID and Render logs.': 'Telegram: '+(n.reason||'no notification status returned')+'.';$('pairStatus').textContent=(d.source||'Provider')+' · '+(d.count||0)+' candles available. '+notifyText;
+$('pairStatus').textContent=(d.source||'Provider')+' · '+(d.count||0)+' candles available. Read-only display; no signal analysis or alerts.'
 const rows=(d.recent_candles||[]).slice().reverse().map(x=>'<tr><td>'+new Date(x.time*1000).toLocaleString()+'</td><td>'+fmt(x.open)+'</td><td>'+fmt(x.high)+'</td><td>'+fmt(x.low)+'</td><td class="price">'+fmt(x.close)+'</td></tr>').join('');
-$('candles').innerHTML=rows||'<tr><td colspan="5">No candle history.</td></tr>';}
-async function loadStatus(){try{const r=await fetch('/api/status',{cache:'no-store'}),d=await r.json();$('provider').textContent=d.source||'Unknown';$('marketType').textContent=d.market_type||'Provider-specific';$('connection').textContent=d.connected?'Connected':(d.streaming_available?'Stream configured':'Status reported by provider');$('statusMessage').textContent=d.message||'Provider status loaded. Check provider-specific availability before relying on data.';}catch(e){$('statusMessage').textContent='Status unavailable: '+e.message;}}
+$('candles').innerHTML=rows||'<tr><td colspan="5">No candle history.</td></tr>';if(candleSeries){const chartRows=(d.chart?.candles||d.recent_candles||[]).map(x=>({time:Number(x.time),open:Number(x.open),high:Number(x.high),low:Number(x.low),close:Number(x.close)})).filter(x=>Number.isFinite(x.time)&&Number.isFinite(x.open)&&Number.isFinite(x.high)&&Number.isFinite(x.low)&&Number.isFinite(x.close));candleSeries.setData(chartRows);chart.timeScale().fitContent();}}
+async function loadStatus(){try{const r=await fetch('/api/status',{cache:'no-store'}),d=await r.json();$('provider').textContent=d.source||'Unknown';$('marketType').textContent=d.market_type||'Provider-specific';$('connection').textContent=d.security_blocked?'Disabled — demo verification pending':(d.connected?'Connected':(d.streaming_available?'Stream configured':'Not connected'));$('statusMessage').textContent=d.message||'Provider status loaded. Check provider-specific availability before relying on data.';}catch(e){$('statusMessage').textContent='Status unavailable: '+e.message;}}
 async function loadPairs(){try{const r=await fetch('/api/watchlist',{cache:'no-store'}),d=await r.json();symbols=d.symbols||[];$('pair').innerHTML=symbols.map(s=>'<option value="'+s+'">'+s+'</option>').join('')||'<option value="">No configured pairs</option>';$('marketType').textContent=d.market_type||'Provider-specific';$('provider').textContent=d.source||'Unknown';$('pairStatus').textContent='Configured '+symbols.length+' pairs · '+(d.note||'Cached data only until manually refreshed.');await loadSnapshot();}catch(e){$('pairStatus').textContent='Could not load watchlist: '+e.message;}}
 async function loadSnapshot(){const s=$('pair').value;if(!s)return;try{const r=await fetch('/api/latest?asset='+encodeURIComponent(s),{cache:'no-store'});showSnapshot(await r.json());}catch(e){$('pairStatus').textContent='Snapshot unavailable: '+e.message;}}
 async function refreshPair(){const b=$('refresh');b.disabled=true;b.textContent='Fetching…';try{const s=$('pair').value;if(!s)throw new Error('No pair selected');const r=await fetch('/api/refresh?asset='+encodeURIComponent(s),{method:'POST',cache:'no-store'}),d=await r.json();if(!r.ok)throw new Error(d.detail||'Provider fetch failed');showSnapshot(d);}catch(e){$('pairStatus').textContent='Fetch failed: '+e.message;}finally{b.disabled=false;b.textContent='Fetch latest candles (1 request)';}}
@@ -170,6 +176,10 @@ def assets():
         }
     except MarketDataError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from None
+    except RuntimeError as exc:
+        # The A11KSA security gate raises RuntimeError subclasses while the
+        # adapter is intentionally disabled. Keep this a controlled 502.
+        raise HTTPException(status_code=502, detail=str(exc)[:300]) from None
 
 
 def _validate_timeframe(timeframe_seconds: int) -> None:
@@ -198,6 +208,9 @@ def candles(
         raise HTTPException(status_code=422, detail=str(exc)) from None
     except MarketDataError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from None
+    except RuntimeError as exc:
+        # Fail-closed provider gates are operational errors, not server crashes.
+        raise HTTPException(status_code=502, detail=str(exc)[:300]) from None
 
 
 @app.get("/api/analysis")
@@ -206,7 +219,9 @@ def analysis(
     timeframe_seconds: int = Query(60, ge=1),
     limit: int = Query(100, ge=30, le=5000),
 ):
-    """Direct one-off analysis; makes one provider candle request."""
+    """Direct one-off analysis; disabled for the A11KSA demo candle-only mode."""
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        raise HTTPException(status_code=404, detail="Analysis is disabled for A11KSA candle-only mode.")
     _validate_timeframe(timeframe_seconds)
     try:
         result = get_candles(asset, timeframe_seconds, limit)
@@ -261,6 +276,8 @@ async def refresh(asset: str | None = Query(None, min_length=3, max_length=40)):
 
 @app.get("/api/history")
 def history(limit: int = Query(50, ge=1, le=200)):
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        raise HTTPException(status_code=404, detail="Signal history is disabled for A11KSA candle-only mode.")
     return {
         "summary": history_summary(),
         "records": get_history(limit),
@@ -271,6 +288,8 @@ def history(limit: int = Query(50, ge=1, le=200)):
 
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        return RedirectResponse(url="/market", status_code=307)
     return """<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Quotex Demo Live Data & Signal Bot</title><script src='https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js'></script><style>
 *{box-sizing:border-box}body{font-family:system-ui,-apple-system,sans-serif;max-width:1180px;margin:28px auto;padding:0 16px;background:#10131a;color:#f3f4f6}section{background:#1c2230;border-radius:14px;padding:20px;margin:14px 0;overflow:hidden}small,.muted{color:#b6c0d1}.warn{color:#ffcc80}.signal{font-size:1.5rem;font-weight:750}button{background:#7c9cff;color:#10131a;border:0;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer}button:disabled{opacity:.55}table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:.88rem}th,td{text-align:right;padding:8px;border-bottom:1px solid #3a4355;white-space:nowrap}th:first-child,td:first-child{text-align:left}.tablewrap{overflow-x:auto}.chart{height:340px;width:100%}.macdchart{height:170px;width:100%}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}.metric{background:#121722;border-radius:10px;padding:12px}.metric strong{display:block;font-size:1.05rem;margin-top:4px}.pill{display:inline-block;background:#303b52;padding:4px 8px;border-radius:999px;font-size:.8rem}.history-good{color:#73d6ae}.history-bad{color:#ff8c8c}@media(max-width:600px){.chart{height:290px}section{padding:14px}}
 </style></head><body>

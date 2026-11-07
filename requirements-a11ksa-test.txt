@@ -1,0 +1,2 @@
+# Exact upstream revision reviewed for this isolated security test.
+git+https://github.com/A11ksa/API-Quotex.git@c678640a1ce06aea92aa2c823ef155ce4b8b8ab0
