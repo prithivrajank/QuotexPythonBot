@@ -256,15 +256,18 @@ def parse_candle_event(frame: str | bytes, expected_asset: str) -> list[dict[str
                     (second, third, fourth),  # low, high, close
                     (fourth, third, second),  # low, high, close from close, high, low
                 ]
-                valid = [
+                valid = {
                     (low, high, close)
                     for low, high, close in candidates
                     if high >= max(open_price, close, low)
                     and low <= min(open_price, close, high)
-                ]
+                }
+                # If both layouts are valid but normalize to identical OHLC,
+                # the row is unambiguous in value and can be accepted safely.
+                # If they produce different OHLC values, reject rather than guess.
                 if len(valid) != 1:
                     continue
-                low_price, high_price, close_price = valid[0]
+                low_price, high_price, close_price = next(iter(valid))
             else:
                 low_price = float(row[2])
                 high_price = float(row[3])
