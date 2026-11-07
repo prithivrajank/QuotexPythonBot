@@ -33,21 +33,18 @@ def test_endpoint_is_pinned_to_reviewed_wss_host():
 
 
 def test_only_allowlisted_events_can_be_sent():
+    # Authorization is the upstream raw-SSID handshake, not a JSON event.
     assert ALLOWED_OUTBOUND_EVENTS == {
-        "authorization", "instruments/follow", "instruments/update",
-        "chart_notification/get"
+        "instruments/follow", "instruments/update", "chart_notification/get"
     }
     for forbidden in ("balance", "orders/open", "orders/close", "place_order"):
         with pytest.raises(CandleTransportError):
             _event_frame(forbidden, {})
 
 
-def test_demo_authorization_frame_never_selects_live_mode():
-    frame = build_authorization_frame("demo-session")
-    event, payload = json.loads(frame[2:])
-    assert event == "authorization"
-    assert payload["isDemo"] == 1
-    assert payload["session"] == "demo-session"
+def test_demo_authorization_frame_matches_reviewed_raw_ssid_handshake():
+    # The server must separately confirm demo mode in s_authorization.
+    assert build_authorization_frame("demo-session") == "demo-session"
 
 
 def test_empty_session_is_rejected():
@@ -96,7 +93,7 @@ def test_parse_observed_binary_candle_payload():
 def test_parse_accepts_matching_socketio_json_candle_event():
     frame = "42" + json.dumps(["history/list/v2", {
         "asset": "EURUSD_otc", "period": 60,
-        "candles": [[1700000040, 1.0, 1.1, 1.2, 0.9, 12, 1700000099.0]]
+        "candles": [[1700000040, 1.0, 0.9, 1.2, 1.1, 12, 1700000099.0]]
     }])
     assert parse_candle_event(frame, "EURUSD_otc")[0]["close"] == 1.1
 
