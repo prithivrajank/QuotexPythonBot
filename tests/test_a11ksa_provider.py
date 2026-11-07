@@ -14,16 +14,18 @@ def test_status_is_fail_closed(monkeypatch):
     assert status["connected"] is False
     assert status["live_data"] is False
     assert status["security_blocked"] is True
+    assert "demo authorization" in status["message"]
+    assert "60-second candle delivery" in status["message"]
     assert "No session was used" in status["message"]
 
 
 def test_assets_refuses_to_connect():
-    with pytest.raises(A11ksaSecurityError, match="TLS"):
+    with pytest.raises(A11ksaSecurityError, match="demo authorization"):
         get_assets()
 
 
 def test_candles_refuses_to_connect():
-    with pytest.raises(A11ksaSecurityError, match="TLS"):
+    with pytest.raises(A11ksaSecurityError, match="60-second candle delivery"):
         get_candles("EURUSD_otc", 60, 100)
 
 
