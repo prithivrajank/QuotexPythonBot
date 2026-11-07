@@ -34,7 +34,7 @@ def connection_status() -> dict[str, Any]:
     return {
         "connected": False,
         "live_data": False,
-        "credentials_configured": bool(os.getenv("QUOTEX_SSID", "").strip()),
+        "credentials_configured": bool(os.getenv("QUOTEX_DEMO_SSID", "").strip()),
         "message": (
             "A11ksa integration is blocked by a TLS security issue in the "
             "upstream WebSocket client. No session was used."
