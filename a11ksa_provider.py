@@ -1,8 +1,8 @@
 """Fail-closed A11ksa candle adapter.
 
-The upstream A11ksa API-Quotex WebSocket client currently constructs a TLS
-context with hostname checks disabled and CERT_NONE. This adapter intentionally
-does not import or connect that client until upstream TLS verification is fixed.
+The custom candle transport uses verified TLS, but live demo authorization
+and real 60-second candle delivery have not yet been independently verified.
+This adapter therefore remains disabled and does not open a session.
 
 Only candle-history access is in scope. No balance, order, buy/sell, or result
 methods are exposed here.
@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-SOURCE = "A11ksa API-Quotex (unofficial; disabled pending TLS verification fix)"
+SOURCE = "A11ksa API-Quotex (unofficial; disabled pending live demo-protocol verification)"
 
 
 class A11ksaSecurityError(RuntimeError):
@@ -20,13 +20,14 @@ class A11ksaSecurityError(RuntimeError):
 
 
 def _security_gate() -> None:
-    # Explicit opt-in is not sufficient: upstream TLS verification must first
-    # be corrected and independently reviewed. Never bypass this guard using
-    # an environment variable.
+    # Verified TLS in the custom transport is necessary but not sufficient.
+    # Keep this gate closed until the real server confirms demo authorization
+    # and delivers independently validated 60-second candles. Never bypass
+    # this guard using an environment variable.
     raise A11ksaSecurityError(
-        "A11ksa adapter is disabled: upstream WebSocket code disables TLS "
-        "certificate and hostname verification. Use a provider with verified "
-        "TLS until the upstream client is corrected and reviewed."
+        "A11ksa adapter is disabled: live demo authorization and real "
+        "60-second candle delivery have not been independently verified. "
+        "No session was used."
     )
 
 
@@ -36,8 +37,9 @@ def connection_status() -> dict[str, Any]:
         "live_data": False,
         "credentials_configured": bool(os.getenv("QUOTEX_DEMO_SSID", "").strip()),
         "message": (
-            "A11ksa integration is blocked by a TLS security issue in the "
-            "upstream WebSocket client. No session was used."
+            "A11ksa integration remains disabled pending independent "
+            "verification of live demo authorization and real 60-second "
+            "candle delivery. No session was used."
         ),
         "source": SOURCE,
         "market_type": "Quotex OTC (unverified; unavailable)",
