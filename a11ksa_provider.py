@@ -16,7 +16,7 @@ SOURCE = "A11ksa API-Quotex (unofficial; disabled pending live demo-protocol ver
 
 
 class A11ksaSecurityError(RuntimeError):
-    """Raised when the upstream client cannot meet the TLS security gate."""
+    """Raised while live demo authorization and candle delivery remain unverified."""
 
 
 def _security_gate() -> None:
