@@ -79,7 +79,7 @@ def test_parse_candle_event_accepts_binary_attachment_and_candles_key():
         "candles": [[1_800_000_000, 1.1, 1.0, 1.2, 1.15, 10]],
     }
 
-    candles = parse_candle_event(b"\\x04" + json.dumps(body).encode(), "EURUSD_otc")
+    candles = parse_candle_event(b"\x04" + json.dumps(body).encode(), "EURUSD_otc")
 
     assert len(candles) == 1
     assert candles[0]["open"] == 1.1
