@@ -9,11 +9,12 @@ from a11ksa_provider import (
 
 
 def test_status_is_fail_closed(monkeypatch):
-    monkeypatch.setenv("QUOTEX_SSID", "placeholder-not-used")
+    monkeypatch.setenv("QUOTEX_DEMO_SSID", "placeholder-not-used")
     status = connection_status()
     assert status["connected"] is False
     assert status["live_data"] is False
     assert status["security_blocked"] is True
+    assert status["credentials_configured"] is True
     assert "demo authorization" in status["message"]
     assert "60-second candle delivery" in status["message"]
     assert "No session was used" in status["message"]
