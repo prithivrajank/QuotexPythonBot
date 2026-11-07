@@ -176,6 +176,10 @@ def assets():
         }
     except MarketDataError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from None
+    except RuntimeError as exc:
+        # The A11KSA security gate raises RuntimeError subclasses while the
+        # adapter is intentionally disabled. Keep this a controlled 502.
+        raise HTTPException(status_code=502, detail=str(exc)[:300]) from None
 
 
 def _validate_timeframe(timeframe_seconds: int) -> None:
@@ -204,6 +208,9 @@ def candles(
         raise HTTPException(status_code=422, detail=str(exc)) from None
     except MarketDataError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from None
+    except RuntimeError as exc:
+        # Fail-closed provider gates are operational errors, not server crashes.
+        raise HTTPException(status_code=502, detail=str(exc)[:300]) from None
 
 
 @app.get("/api/analysis")
