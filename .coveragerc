@@ -1,5 +1,6 @@
 [run]
 branch = True
+relative_files = True
 source =
     strategies
     backtester
@@ -8,6 +9,7 @@ source =
 omit =
     */tests/*
     */.venv/*
+    */site-packages/*
 
 [report]
 show_missing = True
