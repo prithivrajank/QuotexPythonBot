@@ -180,7 +180,7 @@ def generate_weekly_report(now: datetime | None = None) -> dict[str, Any]:
             "This is historical reporting, not a prediction or verified broker return.",
         ],
     }
-    _export_report(report)
+    report["exports"] = _export_report(report)
     return report
 
 
