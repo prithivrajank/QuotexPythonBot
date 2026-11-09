@@ -88,10 +88,11 @@ def run_backtest(
     """Backtest the strategy at 1/2/3-candle expiries on chronological OHLC."""
     if expiry not in SUPPORTED_EXPIRIES:
         raise ValueError("expiry must be 1, 2, or 3 candles")
-    if len(candles) < MINIMUM_HISTORY + expiry + 1:
+    minimum_candles = MINIMUM_HISTORY + max(SUPPORTED_EXPIRIES)
+    if len(candles) < minimum_candles:
         raise ValueError(
-            f"At least {MINIMUM_HISTORY + expiry + 1} candles are required "
-            f"for a {expiry}-candle expiry"
+            f"At least {minimum_candles} candles are required to compare "
+            "all supported expiries (1, 2, and 3 candles)"
         )
 
     ordered = sorted(candles, key=lambda row: int(row.get("time", 0)))
