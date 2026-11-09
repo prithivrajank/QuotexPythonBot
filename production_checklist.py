@@ -25,10 +25,9 @@ def _check(name: str, status: str, message: str) -> dict[str, str]:
 
 def _telegram_check() -> dict[str, str]:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-    if not token or not chat_id:
+    if not token:
         return _check("telegram_connectivity", "WARNING",
-                      "Telegram credentials are not configured; no connectivity test was made.")
+                      "TELEGRAM_BOT_TOKEN is not configured; no connectivity test was made.")
     try:
         import requests
         response = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=5)
