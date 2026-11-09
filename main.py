@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from backtester import run_backtest
+from backtester import run_backtest, run_strategy_comparison
 from walkforward import run_walkforward
 from health_monitor import record_exception, set_component, snapshot as health_snapshot, websocket_connected, websocket_disconnected
 from pair_performance import filter_analysis, pair_performance_summary
@@ -20,8 +20,10 @@ from signal_history import (
     get_signal_grade_statistics,
     get_signal_score_statistics,
     history_summary,
+    get_strategy_statistics,
 )
 from strategies import analyze_candles, build_chart_data
+from strategy_registry import list_strategies
 
 
 @asynccontextmanager
@@ -358,6 +360,49 @@ def backtest_api(
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)[:300]) from None
 
+
+
+
+@app.get("/api/strategies")
+def strategies_api():
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        raise HTTPException(status_code=404, detail="Strategy analytics are disabled for A11KSA candle-only mode.")
+    stats = get_strategy_statistics()
+    rows = []
+    for meta in list_strategies():
+        row = stats.get(meta["name"], {"strategy_name": meta["name"], "strategy_version": meta["version"], "signals": 0, "wins": 0, "losses": 0, "win_rate": None, "scored_signals": 0})
+        rows.append({**meta, **row})
+    rows.sort(key=lambda x: (x["win_rate"] is None, -(x["win_rate"] or 0), -x["scored_signals"], x["strategy_name"]))
+    for rank, row in enumerate(rows, 1):
+        row["rank"] = rank
+    return {"strategies": rows, "ranking_method": "Win rate descending; completed WIN/LOSS sample size descending as tie-breaker."}
+
+
+@app.get("/api/strategy-comparison")
+def strategy_comparison_api(
+    symbol: str = Query("EUR/USD", min_length=3, max_length=40),
+    timeframe: str = Query("1m", min_length=1, max_length=12),
+    expiry: int = Query(1, ge=1, le=3),
+    candle_count: int = Query(500, ge=34, le=5000),
+):
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        raise HTTPException(status_code=404, detail="Strategy comparison is disabled for A11KSA candle-only mode.")
+    try:
+        key = timeframe.strip().lower()
+        seconds = int(key) if key.isdigit() else _BACKTEST_TIMEFRAMES.get(key)
+        if seconds is None:
+            raise ValueError("Unsupported timeframe.")
+        _validate_timeframe(seconds)
+        candles_result = get_candles(symbol, seconds, candle_count)
+        result = run_strategy_comparison(candles_result, symbol=symbol, expiry=expiry)
+        return {**result, "timeframe": key, "timeframe_seconds": seconds, "source": data_source_label(),
+                "market_type": candles_result[-1].get("market_type", "provider-specific market") if candles_result else "provider-specific market"}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except MarketDataError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)[:300]) from None
 
 
 @app.get("/api/walkforward")
