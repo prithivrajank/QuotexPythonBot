@@ -13,6 +13,7 @@ from signal_history import record_signal, score_due_outcomes
 from pair_performance import filter_analysis, get_pair_status
 from strategies import analyze_candles, build_chart_data
 from telegram_market_data import notify_new_candle, telegram_configured
+from health_monitor import record_candle, record_exception, record_signal, record_telegram_result, set_component
 
 DEFAULT_SYMBOLS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
@@ -136,6 +137,7 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
         candles = get_candles(selected, timeframe_seconds, CANDLE_LIMIT)
         if not candles:
             raise MarketDataError("Provider returned zero candles.")
+        record_candle(candles[-1].get("time"))
         if provider == "a11ksa":
             latest = candles[-1]
             now = datetime.now(timezone.utc)
@@ -153,11 +155,22 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
             with _lock:
                 _snapshots[selected] = snapshot
             return dict(snapshot)
-        analysis = filter_analysis(selected, analyze_candles(candles))
+        try:
+            analysis = filter_analysis(selected, analyze_candles(candles))
+            record_signal(candles[-1].get("time"), analysis.get("signal"))
+        except Exception:
+            record_exception("strategy")
+            set_component("strategy", "down", "Strategy analysis failed.")
+            raise
         pair_status = get_pair_status(selected)
         latest = candles[-1]
-        record = record_signal(selected, TIMEFRAME_SECONDS, latest, analysis)
-        score_due_outcomes(selected, TIMEFRAME_SECONDS, latest, horizon_candles=5)
+        try:
+            record = record_signal(selected, TIMEFRAME_SECONDS, latest, analysis)
+            score_due_outcomes(selected, TIMEFRAME_SECONDS, latest, horizon_candles=5)
+        except Exception:
+            record_exception("database")
+            set_component("database", "down", "Signal-history database write failed.")
+            raise
         now_ts = int(datetime.now(timezone.utc).timestamp())
         candle_age_seconds = max(0, now_ts - int(latest["time"]))
         # This labels the timestamp window only; REST polling does not guarantee tick-by-tick updates.
@@ -193,11 +206,14 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
             if pair_status == "DISABLED"
             else notify_new_candle(snapshot)
         )
+        record_telegram_result(notification)
         snapshot["telegram_notification"] = notification
         with _lock:
             _snapshots[selected] = snapshot
         return dict(snapshot)
     except (MarketDataError, ValueError, TypeError, RuntimeError) as exc:
+        record_exception("provider")
+        set_component("provider", "degraded", "Provider candle refresh failed.")
         error_snapshot = {
             "available": False,
             "source": data_source_label(),
