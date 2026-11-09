@@ -64,6 +64,16 @@ The adaptive pair filter reads completed outcomes from `signal_history.py` and c
 - Backtesting is unavailable when `MARKET_DATA_PROVIDER=a11ksa`, because that provider mode is intentionally limited to candle display only.
 
 
+
+## Production health monitoring
+
+- `GET /api/health` reports process-local `health_score`, `status`, `websocket`, `database`, `provider`, `telegram`, and `uptime_seconds`, plus strategy status, component details, last signal/candle timestamps, and exception counters.
+- Health starts at 100. The monitor deducts 15 for a disconnected market WebSocket, 30 for a failed database check, 15 for Telegram delivery failures, 20 when no candles have been received since process start, and 20 when no CALL/PUT signals have been generated since process start. Provider-down state deducts another 20; a strategy failure deducts 10. The score is clamped between 0 and 100.
+- Status is `HEALTHY` at 70 or above, `WARNING` below 70, and `CRITICAL` below 50. The dashboard polls the endpoint every 15 seconds and displays a warning or critical message automatically.
+- Uptime is measured with a monotonic process clock and resets when the application process restarts. Counters and timestamps are process-local and are not durable across restarts or shared between multiple Render workers/instances.
+- WebSocket health means at least one client is connected to `/ws/market`; it does not claim that a provider supplies live ticks. Telegram being unconfigured or intentionally suppressed is reported as `unknown`, not as a delivery failure. The database check performs a lightweight read against the existing signal-history SQLite store.
+- Existing `GET /health` remains unchanged for compatibility. This monitor is operational telemetry, not an uptime SLA or a guarantee of provider availability.
+
 ## Walk-forward validation
 
 - Run the dashboard widget on the main page or call `GET /api/walkforward?symbol=EUR%2FUSD&timeframe=1m&expiry=1&candle_count=500`.
