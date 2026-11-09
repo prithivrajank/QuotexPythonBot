@@ -1,4 +1,6 @@
 from contextlib import asynccontextmanager
+import csv
+import io
 import asyncio
 import os
 import threading
@@ -6,7 +8,7 @@ import time
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 from backtester import run_backtest, run_strategy_comparison
 from walkforward import run_walkforward
@@ -26,6 +28,7 @@ from strategies import analyze_candles, build_chart_data
 from strategy_registry import analyze_with_strategy, list_strategies
 from strategy_manager import get_active_strategy, get_strategy_manager_status, apply_strategy_management
 from weekly_report import generate_weekly_report, record_health_snapshot, render_weekly_report_html
+from validation_dashboard import get_validation_payload, validation_csv_rows
 
 
 @asynccontextmanager
@@ -543,6 +546,77 @@ def pair_performance():
     if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
         raise HTTPException(status_code=404, detail="Pair performance is disabled for A11KSA candle-only mode.")
     return pair_performance_summary()
+
+
+
+@app.get("/api/validation-dashboard")
+def validation_dashboard_api():
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        raise HTTPException(status_code=404, detail="Signal validation is disabled for A11KSA candle-only mode.")
+    return get_validation_payload()
+
+
+@app.get("/api/validation-dashboard/export.csv")
+def validation_dashboard_csv():
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        raise HTTPException(status_code=404, detail="Signal validation export is disabled for A11KSA candle-only mode.")
+    payload = get_validation_payload()
+    output = io.StringIO()
+    rows = validation_csv_rows(payload)
+    fields = list(rows[0].keys()) if rows else [
+        "id", "symbol", "timeframe_seconds", "signal_time", "signal_time_iso",
+        "signal", "entry_price", "exit_price", "price_change_pct", "signal_score",
+        "signal_grade", "strategy_name", "strategy_version", "outcome", "reason", "created_at",
+    ]
+    writer = csv.DictWriter(output, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="validation_signals_last_500.csv"'},
+    )
+
+
+@app.get("/validation", response_class=HTMLResponse)
+def validation_dashboard_page():
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        return RedirectResponse(url="/market", status_code=307)
+    return """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Signal Validation Dashboard</title>
+<style>
+*{box-sizing:border-box}body{margin:24px auto;padding:0 16px;max-width:1250px;background:#10131a;color:#f3f4f6;font:15px system-ui,-apple-system,sans-serif}a{color:#9bb4ff}section{background:#1c2230;border-radius:13px;padding:18px;margin:14px 0;overflow:hidden}.muted{color:#aab4c5}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:10px}.metric{background:#121722;padding:13px;border-radius:9px}.metric strong{display:block;font-size:1.35rem;margin-top:6px}.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}.tablewrap{overflow:auto}table{border-collapse:collapse;width:100%;font-size:.88rem}th,td{text-align:left;padding:9px;border-bottom:1px solid #3b4558;white-space:nowrap}button{background:#8da8ff;color:#10131a;border:0;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer}@media(max-width:600px){body{margin:12px auto}section{padding:13px}}
+</style></head><body>
+<h1>Signal Validation Dashboard</h1><p class="muted">Latest 500 signal records · completed WIN/LOSS outcomes determine win rates · recent windows use UTC</p>
+<p><a href="/">← Main dashboard</a> &nbsp; <a href="/api/validation-dashboard">JSON data</a> &nbsp; <a href="/api/validation-dashboard/export.csv">Export latest 500 signals (CSV) ↓</a> &nbsp; <button onclick="load()">Refresh</button></p>
+<section><h2>Performance metrics · latest 500</h2><div class="grid" id="metrics"><div class="metric">Loading…</div></div><p id="gradeNote" class="muted"></p></section>
+<div class="cols"><section><h2>Signal grade win rates</h2><div class="grid" id="grades"></div></section><section><h2>Recent performance</h2><div class="grid" id="periods"></div><p class="muted">24h, 7d and 30d windows are calculated independently from all stored signals.</p></section></div>
+<div class="cols"><section><h2>Top 10 pairs</h2><div class="tablewrap"><table><thead><tr><th>Pair</th><th>Signals</th><th>Wins</th><th>Losses</th><th>Win rate</th></tr></thead><tbody id="pairs"></tbody></table></div></section>
+<section><h2>Top strategies</h2><div class="tablewrap"><table><thead><tr><th>Strategy</th><th>Signals</th><th>Wins</th><th>Losses</th><th>Win rate</th></tr></thead><tbody id="strategies"></tbody></table></div></section></div>
+<section><h2>System health</h2><div class="grid" id="health"><div class="metric">Loading…</div></div><p id="healthNote" class="muted"></p></section>
+<section><h2>Last 500 signals</h2><div class="tablewrap"><table><thead><tr><th>Time (UTC)</th><th>Pair</th><th>Signal</th><th>Grade</th><th>Score</th><th>Strategy</th><th>Entry</th><th>Outcome</th></tr></thead><tbody id="records"></tbody></table></div><p class="muted" id="recordCount"></p></section>
+<p class="muted" id="status">Loading dashboard…</p>
+<script>
+const el=id=>document.getElementById(id),pct=v=>v===null||v===undefined?'N/A':Number(v).toFixed(2)+'%',num=v=>v===null||v===undefined?'—':v;
+function card(label,value){return '<div class="metric">'+label+'<strong>'+value+'</strong></div>'}
+function tableRows(rows,cols){return rows.length?rows.map(r=>'<tr>'+cols.map(c=>'<td>'+num(r[c])+'</td>').join('')+'</tr>').join(''):'<tr><td colspan="'+cols.length+'">No data yet</td></tr>'}
+async function load(){el('status').textContent='Refreshing…';try{
+ const [r,h]=await Promise.all([fetch('/api/validation-dashboard',{cache:'no-store'}),fetch('/api/health',{cache:'no-store'})]);
+ const d=await r.json(),health=await h.json();if(!r.ok)throw new Error(d.detail||'Validation data unavailable');
+ const m=d.metrics;el('metrics').innerHTML=card('Total signals',m.total_signals)+card('Wins',m.wins)+card('Losses',m.losses)+card('Win rate',pct(m.win_rate));
+ el('grades').innerHTML=['strong','moderate','weak'].map(k=>{const x=m.by_signal_grade[k];return card(k.toUpperCase(),pct(x.win_rate))}).join('');
+ el('gradeNote').textContent='Grade win rates use '+['strong','moderate','weak'].map(k=>m.by_signal_grade[k].scored_signals+' '+k+' completed outcomes').join(' · ')+'.';
+ el('periods').innerHTML=['24h','7d','30d'].map(k=>{const x=d.recent_performance[k];return card(k.toUpperCase(),pct(x.win_rate))}).join('');
+ el('pairs').innerHTML=tableRows(d.top_pairs.map(x=>({...x,win_rate:pct(x.win_rate)})),['symbol','total_signals','wins','losses','win_rate']);
+ el('strategies').innerHTML=tableRows(d.top_strategies.map(x=>({...x,strategy_name:x.strategy_name+' v'+x.strategy_version,win_rate:pct(x.win_rate)})),['strategy_name','total_signals','wins','losses','win_rate']);
+ el('records').innerHTML=d.records.map(x=>'<tr><td>'+x.signal_time_iso+'</td><td>'+x.symbol+'</td><td>'+x.signal+'</td><td>'+num(x.signal_grade)+'</td><td>'+num(x.signal_score)+'</td><td>'+num(x.strategy_name)+'</td><td>'+num(x.entry_price)+'</td><td>'+x.outcome+'</td></tr>').join('')||'<tr><td colspan="8">No signals recorded</td></tr>';
+ el('recordCount').textContent='Showing '+d.records.length+' of latest '+d.record_limit+' signal records. Generated '+d.generated_at+'.';
+ el('health').innerHTML=card('Uptime',Math.floor((health.uptime_seconds||0)/3600)+'h '+Math.floor(((health.uptime_seconds||0)%3600)/60)+'m')+card('Provider',health.provider)+card('Telegram',health.telegram)+card('Database',health.database)+card('Health score',health.health_score+'/100');
+ el('healthNote').textContent='System status: '+health.status+' · Errors: '+health.error_count+' · Health is process-local and resets on restart.';
+ el('status').textContent='Updated '+new Date().toLocaleTimeString()+' · '+d.methodology;
+ }catch(e){el('status').textContent='Dashboard error: '+e.message}}
+load();setInterval(load,60000);
+</script></body></html>"""
 
 
 @app.get("/api/history")
