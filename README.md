@@ -43,6 +43,16 @@ Set provider-specific environment variables only in Render's Environment UI. Do 
 - `POST /api/refresh?asset=EURUSD_otc` — manual refresh; uses provider quota.
 - `/api/history?limit=50` — signal-history summary.
 
+## Historical backtesting
+
+- Open `/backtest` for the historical backtesting dashboard.
+- Call `GET /api/backtest?symbol=EUR%2FUSD&timeframe=1m&expiry=1&candle_count=500`.
+- Parameters: `symbol` is the provider's exact instrument identifier; `timeframe` accepts supported values such as `1m`, `5m`, `15m`, `30m`, `45m`, `1h`, `2h`, `4h`, `8h`, `1d`, `1w`, or `1mo`; `expiry` is 1, 2, or 3 candles; `candle_count` is 34–5000.
+- The backtester calls the existing `strategies.analyze_candles()` and uses only candles available up to each decision candle. Entry is the decision candle close and exit is the close after the selected expiry. It also compares 1-, 2-, and 3-candle expiries to report `best_expiry`.
+- Response includes `total_signals`, `wins`, `losses`, `win_rate`, `profit_factor`, `best_asset`, `best_expiry`, `strategy_version`, and an `expiry_comparison` array. WAIT and flat outcomes are not counted as wins or losses; WAIT is reported separately.
+- Profit factor is calculated from summed directional percentage price moves, not binary-options payout, spread, fees, slippage, or executable fills. Results are research estimates, not a prediction or guarantee.
+- Backtesting is unavailable when `MARKET_DATA_PROVIDER=a11ksa`, because that provider mode is intentionally limited to candle display only.
+
 ## Signal limitations
 
 CALL/PUT/WAIT labels, indicator summaries, and expiry suggestions are heuristic analysis, not validated probabilities, financial advice, or guaranteed predictions. OTC quotes are a broker-specific synthetic series and may differ from standard forex prices. Test against the source chart before relying on any result.
