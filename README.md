@@ -194,3 +194,30 @@ The `quotexapi` adapter now also registers the community library's quote callbac
 The WebSocket integration is based on the upstream library's documented `on_quote` / `subscribe_quotes` and `on_candle` / `subscribe_candles` interfaces. It is unofficial and has not been validated against every Quotex account or symbol. If a symbol produces no ticks, check the Render logs and confirm that the symbol identifier is supported. Never share the SSID.
 
 For Render Free, a connected browser must keep sending heartbeat messages: free services spin down after 15 minutes without inbound HTTP requests or WebSocket messages. A free instance can still restart or disconnect, so this is best-effort hobby streaming, not guaranteed 24/7 uptime. See https://render.com/docs/free and https://render.com/docs/websocket.
+
+
+## Release v1.0.1 — repository quality and runtime resilience
+
+This release candidate adds:
+- Isolated unit tests for backtesting and adaptive pair classification.
+- Pytest and branch-coverage configuration plus a GitHub Actions workflow that publishes terminal, XML, and HTML coverage artifacts.
+- Process-local HTTP execution-time and peak resident-memory metrics at `GET /api/metrics`.
+- A non-blocking startup audit so optional audit work no longer delays the ASGI application becoming ready.
+- Graceful cancellation of the scheduled refresh and startup-audit tasks.
+- A scheduler-level exception boundary so an unexpected symbol iteration error is logged and retried rather than terminating the background loop.
+- Application version metadata set to `1.0.1`.
+
+### Development checks
+
+Install development dependencies and run the suite:
+
+```bash
+python -m pip install -r requirements-dev.txt
+pytest --cov --cov-report=term-missing --cov-report=xml:coverage.xml --cov-report=html:htmlcov
+```
+
+The coverage workflow uploads `coverage.xml` and `htmlcov/` as the `python-test-coverage` artifact. Coverage is not claimed until the workflow has completed successfully.
+
+### Runtime metrics
+
+`GET /api/metrics` reports process-local request count, average and maximum HTTP request duration, and best-effort peak RSS memory. Metrics reset on process restart and are independent per worker; they are operational diagnostics, not host-wide monitoring.
