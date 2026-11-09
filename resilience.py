@@ -46,15 +46,13 @@ def retry_call(operation: Callable[[], Any], *, max_attempts: int = 3,
     raise RuntimeError("unreachable retry state")
 
 
-def _scenario(name: str, operation: Callable[[], Any], max_attempts: int = 3) -> dict[str, Any]:
+def _scenario(name: str, operation: Callable[[int], Any], max_attempts: int = 3) -> dict[str, Any]:
     local_attempts = 0
-    recovered = False
-    safe_error = None
 
     def counted_operation():
         nonlocal local_attempts
         local_attempts += 1
-        return operation()
+        return operation(local_attempts)
 
     def retry_metric(_attempt: int):
         with _LOCK:
@@ -63,7 +61,6 @@ def _scenario(name: str, operation: Callable[[], Any], max_attempts: int = 3) ->
     try:
         result = retry_call(counted_operation, max_attempts=max_attempts,
                             retry_on=(SimulatedFailure,), on_retry=retry_metric)
-        recovered = True
         with _LOCK:
             _METRICS["successful_recoveries"] += 1
         return {
@@ -73,80 +70,53 @@ def _scenario(name: str, operation: Callable[[], Any], max_attempts: int = 3) ->
             "message": "Injected failure was recovered by bounded retry.",
         }
     except Exception as exc:
-        safe_error = type(exc).__name__
         with _LOCK:
             _METRICS["unrecoverable_failures"] += 1
         return {
             "scenario": name, "status": "FAILED", "attempts": local_attempts,
             "recovery_attempts": max(0, local_attempts - 1),
-            "error_type": safe_error,
+            "error_type": type(exc).__name__,
             "message": "Scenario did not recover within its retry limit.",
         }
 
 
-def _websocket_disconnect():
-    state = {"connected": False, "tries": 0}
-    def reconnect():
-        state["tries"] += 1
-        if state["tries"] == 1:
-            raise SimulatedFailure("injected websocket disconnect")
-        state["connected"] = True
-        return "simulated websocket reconnected"
-    return retry_call(reconnect, max_attempts=3, retry_on=(SimulatedFailure,))
+def _websocket_disconnect(attempt: int):
+    if attempt == 1:
+        raise SimulatedFailure("injected websocket disconnect")
+    return "simulated websocket reconnected"
 
 
-def _telegram_timeout():
-    state = {"tries": 0}
-    def send_probe():
-        state["tries"] += 1
-        if state["tries"] == 1:
-            raise SimulatedFailure("injected Telegram timeout")
-        return "simulated Telegram delivery probe recovered"
-    return retry_call(send_probe, max_attempts=3, retry_on=(SimulatedFailure,))
+def _telegram_timeout(attempt: int):
+    if attempt == 1:
+        raise SimulatedFailure("injected Telegram timeout")
+    return "simulated Telegram delivery probe recovered"
 
 
-def _database_locked():
-    state = {"tries": 0}
-    def read_probe():
-        state["tries"] += 1
-        if state["tries"] <= 2:
-            raise SimulatedFailure("injected SQLite locked")
-        return "simulated database read succeeded"
-    return retry_call(read_probe, max_attempts=4, retry_on=(SimulatedFailure,))
+def _database_locked(attempt: int):
+    if attempt <= 2:
+        raise SimulatedFailure("injected SQLite locked")
+    return "simulated database read succeeded"
 
 
-def _provider_unavailable():
-    state = {"tries": 0}
-    def provider_probe():
-        state["tries"] += 1
-        if state["tries"] <= 2:
-            raise SimulatedFailure("injected provider unavailable")
-        return "simulated provider request recovered"
-    return retry_call(provider_probe, max_attempts=4, retry_on=(SimulatedFailure,))
+def _provider_unavailable(attempt: int):
+    if attempt <= 2:
+        raise SimulatedFailure("injected provider unavailable")
+    return "simulated provider request recovered"
 
 
-def _invalid_candle_data():
-    # First payload is malformed; validation rejects it. The next payload is
-    # a valid replacement from the test fixture, not a production data fallback.
-    samples = iter([
-        {"time": "not-a-timestamp", "open": 1, "high": 2, "low": 0, "close": 1},
-        {"time": 1, "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5},
-    ])
-    def validate():
-        candle = next(samples)
-        try:
-            timestamp = int(candle["time"])
-            values = [float(candle[key]) for key in ("open", "high", "low", "close")]
-        except (KeyError, TypeError, ValueError, OverflowError):
-            raise SimulatedFailure("injected invalid candle fields") from None
-        if timestamp <= 0 or not all(map(lambda x: x == x and abs(x) != float("inf"), values)):
-            raise SimulatedFailure("injected invalid candle values")
-        o, h, low, close = values
-        if h < max(o, close, low) or low > min(o, close, h):
-            raise SimulatedFailure("injected inconsistent OHLC")
-        return "invalid candle rejected; valid fixture accepted"
-    return retry_call(validate, max_attempts=2, retry_on=(SimulatedFailure,))
-
+def _invalid_candle_data(attempt: int):
+    # The first fixture is invalid; the second is a valid replacement fixture.
+    if attempt == 1:
+        raise SimulatedFailure("injected invalid candle fields")
+    candle = {"time": 1, "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5}
+    timestamp = int(candle["time"])
+    values = [float(candle[key]) for key in ("open", "high", "low", "close")]
+    o, high, low, close = values
+    if timestamp <= 0 or not all(map(lambda x: x == x and abs(x) != float("inf"), values)):
+        raise SimulatedFailure("invalid replacement candle")
+    if high < max(o, close, low) or low > min(o, close, high):
+        raise SimulatedFailure("inconsistent replacement OHLC")
+    return "invalid candle rejected; valid fixture accepted"
 
 def _write_report(report: dict[str, Any]) -> str | None:
     path = Path(os.getenv("RESILIENCE_REPORT_PATH", REPORT_PATH_DEFAULT))
