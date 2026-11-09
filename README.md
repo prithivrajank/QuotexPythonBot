@@ -87,6 +87,18 @@ The adaptive pair filter reads completed outcomes from `signal_history.py` and c
 
 
 
+
+## Production readiness suite
+
+- Open `/system-audit` from the main dashboard for PASS/WARNING/FAIL status for database connectivity, market WebSocket client connectivity, Telegram Bot API connectivity, strategy registry, pair ranking service, health monitor, backtester, and walk-forward validator.
+- `GET /api/system/audit` runs a fresh audit and returns `overall_status`, `passed_checks`, `failed_checks`, `warnings`, `uptime`, `version`, and per-subsystem `checks`.
+- `GET /api/system/audit/export` downloads the report as `audit_report.json`. The report is also written to `AUDIT_REPORT_PATH`, default `/tmp/audit_report.json`.
+- A startup audit runs during application lifespan startup. Results are logged; failed optional checks do not prevent the existing service from starting.
+- Database validation performs a read through the existing signal-history database. Strategy, pair-ranking, backtester, and walk-forward checks validate imports and callable interfaces; they do not run synthetic trades or fabricate candles.
+- WebSocket status reflects actual connected dashboard clients. If no client is connected at startup, it is WARNING rather than a fabricated PASS.
+- Telegram validation calls the Bot API `getMe` endpoint only when both Telegram settings are configured. It never sends a message and never logs credentials or request URLs. Missing configuration is WARNING.
+- `MARKET_DATA_PROVIDER=a11ksa` continues to redirect the HTML dashboard to the read-only market page; the audit API remains available for operational checks. Audit results are diagnostic snapshots, not an uptime SLA.
+
 ## Signal validation dashboard
 
 - Open `/validation` from the main dashboard to review the latest 500 signal-history records.
