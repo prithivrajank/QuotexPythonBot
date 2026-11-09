@@ -13,6 +13,16 @@ from typing import Any, Iterator
 
 DEFAULT_DB_PATH = "/tmp/forex_signal_history.db"
 
+# Additive schema migrations. Existing rows remain valid and new columns are NULL.
+_ADDITIVE_COLUMNS = {
+    "signal_score": "INTEGER",
+    "signal_grade": "TEXT",
+    "macd_histogram": "REAL",
+    "ema_9": "REAL",
+    "ema_21": "REAL",
+    # rsi_14 already exists in the original schema.
+}
+
 
 def _db_path() -> str:
     return os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
@@ -49,7 +59,22 @@ def init_history() -> None:
                 UNIQUE(symbol, timeframe_seconds, signal_time)
             )"""
         )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_signal_history_time ON signal_history(signal_time DESC)")
+
+        # Inspect the current table so this works for both new and old databases.
+        existing = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(signal_history)").fetchall()
+        }
+        for column, sql_type in _ADDITIVE_COLUMNS.items():
+            if column not in existing:
+                conn.execute(
+                    f"ALTER TABLE signal_history ADD COLUMN {column} {sql_type}"
+                )
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_signal_history_time "
+            "ON signal_history(signal_time DESC)"
+        )
 
 
 def latest_signal(symbol: str, timeframe_seconds: int) -> dict[str, Any] | None:
@@ -63,25 +88,42 @@ def latest_signal(symbol: str, timeframe_seconds: int) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
-def record_signal(symbol: str, timeframe_seconds: int, candle: dict[str, Any], analysis: dict[str, Any]) -> dict[str, Any]:
+def record_signal(
+    symbol: str,
+    timeframe_seconds: int,
+    candle: dict[str, Any],
+    analysis: dict[str, Any],
+) -> dict[str, Any]:
     """Store one signal per candle timestamp; return whether a new row was inserted."""
     init_history()
     previous = latest_signal(symbol, timeframe_seconds)
     signal_time = int(candle["time"])
+
     with _connection() as conn:
         cursor = conn.execute(
             """INSERT OR IGNORE INTO signal_history
-               (symbol,timeframe_seconds,signal_time,signal,entry_price,reason,rsi_14,
-                macd_histogram,outcome,created_at)
-               VALUES (?,?,?,?,?,?,?,?, 'PENDING', ?)""",
+               (symbol,timeframe_seconds,signal_time,signal,entry_price,reason,
+                rsi_14,macd_histogram,signal_score,signal_grade,ema_9,ema_21,
+                outcome,created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'PENDING',?)""",
             (
-                symbol, timeframe_seconds, signal_time, str(analysis.get("signal", "WAIT")),
-                float(candle["close"]), str(analysis.get("reason", ""))[:500],
-                analysis.get("rsi_14"), analysis.get("macd_histogram"),
+                symbol,
+                timeframe_seconds,
+                signal_time,
+                str(analysis.get("signal", "WAIT")),
+                float(candle["close"]),
+                str(analysis.get("reason", ""))[:500],
+                analysis.get("rsi_14"),
+                analysis.get("macd_histogram"),
+                analysis.get("signal_score"),
+                analysis.get("signal_grade"),
+                analysis.get("ema_9"),
+                analysis.get("ema_21"),
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
         inserted = cursor.rowcount == 1
+
     return {
         "inserted": inserted,
         "previous_signal": previous.get("signal") if previous else None,
@@ -89,35 +131,51 @@ def record_signal(symbol: str, timeframe_seconds: int, candle: dict[str, Any], a
     }
 
 
-def score_due_outcomes(symbol: str, timeframe_seconds: int, latest_candle: dict[str, Any], horizon_candles: int = 5) -> int:
+def score_due_outcomes(
+    symbol: str,
+    timeframe_seconds: int,
+    latest_candle: dict[str, Any],
+    horizon_candles: int = 5,
+) -> int:
     """Compare matured signals to the close after a fixed candle horizon."""
     init_history()
     current_time = int(latest_candle["time"])
     exit_price = float(latest_candle["close"])
     cutoff = current_time - timeframe_seconds * horizon_candles
     changed = 0
+
     with _connection() as conn:
         rows = conn.execute(
             """SELECT id,signal,entry_price FROM signal_history
-               WHERE symbol=? AND timeframe_seconds=? AND outcome='PENDING' AND signal_time <= ?""",
+               WHERE symbol=? AND timeframe_seconds=?
+               AND outcome='PENDING' AND signal_time <= ?""",
             (symbol, timeframe_seconds, cutoff),
         ).fetchall()
+
         for row in rows:
-            signal, entry = row["signal"], float(row["entry_price"])
+            signal = row["signal"]
+            entry = float(row["entry_price"])
             pct = ((exit_price - entry) / entry * 100) if entry else 0.0
+
             if signal == "WAIT":
                 outcome = "SKIPPED"
             elif abs(pct) < 1e-12:
                 outcome = "FLAT"
-            elif (signal == "CALL" and exit_price > entry) or (signal == "PUT" and exit_price < entry):
+            elif (
+                (signal == "CALL" and exit_price > entry)
+                or (signal == "PUT" and exit_price < entry)
+            ):
                 outcome = "WIN"
             else:
                 outcome = "LOSS"
+
             conn.execute(
-                "UPDATE signal_history SET outcome=?, exit_price=?, price_change_pct=? WHERE id=?",
+                """UPDATE signal_history
+                   SET outcome=?, exit_price=?, price_change_pct=? WHERE id=?""",
                 (outcome, exit_price, round(pct, 6), row["id"]),
             )
             changed += 1
+
     return changed
 
 
@@ -126,22 +184,89 @@ def get_history(limit: int = 50) -> list[dict[str, Any]]:
     safe_limit = max(1, min(int(limit), 200))
     with _connection() as conn:
         rows = conn.execute(
-            "SELECT * FROM signal_history ORDER BY signal_time DESC, id DESC LIMIT ?", (safe_limit,)
+            """SELECT * FROM signal_history
+               ORDER BY signal_time DESC, id DESC LIMIT ?""",
+            (safe_limit,),
         ).fetchall()
     return [dict(row) for row in rows]
 
 
+def _win_rate(rows: list[sqlite3.Row]) -> dict[str, Any]:
+    wins = sum(row["wins"] for row in rows)
+    losses = sum(row["losses"] for row in rows)
+    total = wins + losses
+    return {
+        "wins": wins,
+        "losses": losses,
+        "scored": total,
+        "win_rate_pct": round(wins / total * 100, 2) if total else None,
+    }
+
+
 def history_summary() -> dict[str, Any]:
+    """Return legacy totals plus additive grade/asset and score statistics."""
     init_history()
     with _connection() as conn:
-        counts = conn.execute("SELECT outcome, COUNT(*) AS count FROM signal_history GROUP BY outcome").fetchall()
+        counts = conn.execute(
+            "SELECT outcome, COUNT(*) AS count "
+            "FROM signal_history GROUP BY outcome"
+        ).fetchall()
+
+        grade_rows = conn.execute(
+            """SELECT signal_grade AS group_name,
+                      SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) AS wins,
+                      SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) AS losses
+               FROM signal_history
+               WHERE signal_grade IS NOT NULL AND outcome IN ('WIN','LOSS')
+               GROUP BY signal_grade ORDER BY signal_grade"""
+        ).fetchall()
+
+        asset_rows = conn.execute(
+            """SELECT symbol AS group_name,
+                      SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) AS wins,
+                      SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) AS losses
+               FROM signal_history
+               WHERE outcome IN ('WIN','LOSS')
+               GROUP BY symbol ORDER BY symbol"""
+        ).fetchall()
+
+        score_averages = conn.execute(
+            """SELECT
+                   AVG(CASE WHEN outcome='WIN' THEN signal_score END) AS avg_win_score,
+                   AVG(CASE WHEN outcome='LOSS' THEN signal_score END) AS avg_loss_score
+               FROM signal_history"""
+        ).fetchone()
+
     by_outcome = {row["outcome"]: row["count"] for row in counts}
-    wins, losses = by_outcome.get("WIN", 0), by_outcome.get("LOSS", 0)
+    wins = by_outcome.get("WIN", 0)
+    losses = by_outcome.get("LOSS", 0)
     scored = wins + losses
+
+    # Keep every existing summary key and add the requested statistics.
     return {
-        "total": sum(by_outcome.values()), "wins": wins, "losses": losses,
-        "flat": by_outcome.get("FLAT", 0), "skipped": by_outcome.get("SKIPPED", 0),
+        "total": sum(by_outcome.values()),
+        "wins": wins,
+        "losses": losses,
+        "flat": by_outcome.get("FLAT", 0),
+        "skipped": by_outcome.get("SKIPPED", 0),
         "pending": by_outcome.get("PENDING", 0),
         "scored_win_rate_pct": round(wins / scored * 100, 2) if scored else None,
-        "note": "Descriptive historical comparison only; not verified trading returns or a prediction.",
+        "win_rate_by_signal_grade": {
+            row["group_name"]: _win_rate([row]) for row in grade_rows
+        },
+        "win_rate_by_asset": {
+            row["group_name"]: _win_rate([row]) for row in asset_rows
+        },
+        "average_score_winning_signals": (
+            round(score_averages["avg_win_score"], 2)
+            if score_averages["avg_win_score"] is not None else None
+        ),
+        "average_score_losing_signals": (
+            round(score_averages["avg_loss_score"], 2)
+            if score_averages["avg_loss_score"] is not None else None
+        ),
+        "note": (
+            "Descriptive historical comparison only; not verified trading "
+            "returns or a prediction."
+        ),
     }
