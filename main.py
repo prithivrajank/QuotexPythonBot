@@ -597,9 +597,9 @@ def validation_dashboard_page():
 <section><h2>Last 500 signals</h2><div class="tablewrap"><table><thead><tr><th>Time (UTC)</th><th>Pair</th><th>Signal</th><th>Grade</th><th>Score</th><th>Strategy</th><th>Entry</th><th>Outcome</th></tr></thead><tbody id="records"></tbody></table></div><p class="muted" id="recordCount"></p></section>
 <p class="muted" id="status">Loading dashboard…</p>
 <script>
-const el=id=>document.getElementById(id),pct=v=>v===null||v===undefined?'N/A':Number(v).toFixed(2)+'%',num=v=>v===null||v===undefined?'—':v;
+const el=id=>document.getElementById(id),esc=v=>String(v??'—').replace(/[&<>\"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c])),pct=v=>v===null||v===undefined?'N/A':Number(v).toFixed(2)+'%',num=v=>v===null||v===undefined?'—':v;
 function card(label,value){return '<div class="metric">'+label+'<strong>'+value+'</strong></div>'}
-function tableRows(rows,cols){return rows.length?rows.map(r=>'<tr>'+cols.map(c=>'<td>'+num(r[c])+'</td>').join('')+'</tr>').join(''):'<tr><td colspan="'+cols.length+'">No data yet</td></tr>'}
+function tableRows(rows,cols){return rows.length?rows.map(r=>'<tr>'+cols.map(c=>'<td>'+esc(r[c])+'</td>').join('')+'</tr>').join(''):'<tr><td colspan="'+cols.length+'">No data yet</td></tr>'}
 async function load(){el('status').textContent='Refreshing…';try{
  const [r,h]=await Promise.all([fetch('/api/validation-dashboard',{cache:'no-store'}),fetch('/api/health',{cache:'no-store'})]);
  const d=await r.json(),health=await h.json();if(!r.ok)throw new Error(d.detail||'Validation data unavailable');
@@ -609,7 +609,7 @@ async function load(){el('status').textContent='Refreshing…';try{
  el('periods').innerHTML=['24h','7d','30d'].map(k=>{const x=d.recent_performance[k];return card(k.toUpperCase(),pct(x.win_rate))}).join('');
  el('pairs').innerHTML=tableRows(d.top_pairs.map(x=>({...x,win_rate:pct(x.win_rate)})),['symbol','total_signals','wins','losses','win_rate']);
  el('strategies').innerHTML=tableRows(d.top_strategies.map(x=>({...x,strategy_name:x.strategy_name+' v'+x.strategy_version,win_rate:pct(x.win_rate)})),['strategy_name','total_signals','wins','losses','win_rate']);
- el('records').innerHTML=d.records.map(x=>'<tr><td>'+x.signal_time_iso+'</td><td>'+x.symbol+'</td><td>'+x.signal+'</td><td>'+num(x.signal_grade)+'</td><td>'+num(x.signal_score)+'</td><td>'+num(x.strategy_name)+'</td><td>'+num(x.entry_price)+'</td><td>'+x.outcome+'</td></tr>').join('')||'<tr><td colspan="8">No signals recorded</td></tr>';
+ el('records').innerHTML=d.records.map(x=>'<tr><td>'+esc(x.signal_time_iso)+'</td><td>'+esc(x.symbol)+'</td><td>'+esc(x.signal)+'</td><td>'+esc(x.signal_grade)+'</td><td>'+esc(x.signal_score)+'</td><td>'+esc(x.strategy_name)+'</td><td>'+esc(x.entry_price)+'</td><td>'+esc(x.outcome)+'</td></tr>').join('')||'<tr><td colspan="8">No signals recorded</td></tr>';
  el('recordCount').textContent='Showing '+d.records.length+' of latest '+d.record_limit+' signal records. Generated '+d.generated_at+'.';
  el('health').innerHTML=card('Uptime',Math.floor((health.uptime_seconds||0)/3600)+'h '+Math.floor(((health.uptime_seconds||0)%3600)/60)+'m')+card('Provider',health.provider)+card('Telegram',health.telegram)+card('Database',health.database)+card('Health score',health.health_score+'/100');
  el('healthNote').textContent='System status: '+health.status+' · Errors: '+health.error_count+' · Health is process-local and resets on restart.';
