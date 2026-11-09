@@ -107,7 +107,7 @@ def record_signal(
                (symbol,timeframe_seconds,signal_time,signal,entry_price,reason,
                 rsi_14,macd_histogram,signal_score,signal_grade,ema_9,ema_21,
                 strategy_name,strategy_version,outcome,created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'PENDING',?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'PENDING',?)""",
             (
                 symbol,
                 timeframe_seconds,
