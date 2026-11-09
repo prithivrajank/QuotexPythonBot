@@ -24,6 +24,7 @@ from signal_history import (
 )
 from strategies import analyze_candles, build_chart_data
 from strategy_registry import analyze_with_strategy, list_strategies
+from weekly_report import generate_weekly_report, record_health_snapshot, render_weekly_report_html
 
 
 @asynccontextmanager
@@ -108,7 +109,13 @@ def production_health():
     except Exception:
         record_exception("provider")
         set_component("provider", "degraded", "Provider health check failed.")
-    return health_snapshot(provider_status)
+    result = health_snapshot(provider_status)
+    try:
+        record_health_snapshot(result)
+    except Exception:
+        # Health endpoint remains available even if trend persistence fails.
+        record_exception("database")
+    return result
 
 
 @app.get("/api/bot")
@@ -361,6 +368,26 @@ def backtest_api(
         raise HTTPException(status_code=502, detail=str(exc)[:300]) from None
 
 
+
+
+
+@app.get("/api/weekly-report")
+def weekly_report_api(
+    format: str = Query("json", pattern="^(json|html)$"),
+):
+    """Generate the rolling seven-day report and persist JSON/HTML exports."""
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        raise HTTPException(status_code=404, detail="Weekly signal reports are disabled for A11KSA candle-only mode.")
+    try:
+        report = generate_weekly_report()
+        if format == "html":
+            return HTMLResponse(
+                content=render_weekly_report_html(report),
+                headers={"Content-Disposition": 'inline; filename="weekly_report.html"'},
+            )
+        return report
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=500, detail=f"Weekly report generation failed: {str(exc)[:240]}") from None
 
 
 @app.get("/api/strategies")
