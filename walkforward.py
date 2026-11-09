@@ -29,8 +29,6 @@ def run_walkforward(candles: list[dict], symbol: str, expiry: int = 1) -> dict[s
     # enough candles in each segment to settle the 3-candle comparison.
     minimum_segment = MINIMUM_HISTORY + 3
     if len(training) < minimum_segment or len(validation) < minimum_segment:
-        required_total = (minimum_segment / TRAINING_RATIO)
-        required_total = max(required_total, minimum_segment / VALIDATION_RATIO)
         raise ValueError(
             "At least 110 chronological candles are required so both the "
             "70% training and 30% validation periods contain enough history"
