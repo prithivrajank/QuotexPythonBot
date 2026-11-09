@@ -24,6 +24,7 @@ from signal_history import (
 )
 from strategies import analyze_candles, build_chart_data
 from strategy_registry import analyze_with_strategy, list_strategies
+from strategy_manager import get_active_strategy, get_strategy_manager_status, apply_strategy_management
 from weekly_report import generate_weekly_report, record_health_snapshot, render_weekly_report_html
 
 
@@ -315,7 +316,7 @@ def analysis(
     _validate_timeframe(timeframe_seconds)
     try:
         result = get_candles(asset, timeframe_seconds, limit)
-        summary = filter_analysis(asset, analyze_with_strategy(result, os.getenv('STRATEGY_NAME', 'SCORE_ENGINE_V2')))
+        summary = filter_analysis(asset, apply_strategy_management(analyze_with_strategy(result, get_active_strategy())))
         return {
             "source": data_source_label(),
             "market_type": result[-1].get("market_type", "provider-specific market") if result else "provider-specific market",
@@ -399,10 +400,27 @@ def strategies_api():
     for meta in list_strategies():
         row = stats.get(meta["name"], {"strategy_name": meta["name"], "strategy_version": meta["version"], "signals": 0, "wins": 0, "losses": 0, "win_rate": None, "scored_signals": 0})
         rows.append({**meta, **row})
+    manager = get_strategy_manager_status()
+    management = {item["name"]: item for item in manager["strategies"]}
+    for row in rows:
+        row.update({
+            "management_status": management.get(row["strategy_name"], {}).get("management_status", "RETAINED"),
+            "active": row["strategy_name"] == manager["active_strategy"],
+            "promotion_win_rate": management.get(row["strategy_name"], {}).get("win_rate"),
+            "rate_source": management.get(row["strategy_name"], {}).get("rate_source"),
+        })
     rows.sort(key=lambda x: (x["win_rate"] is None, -(x["win_rate"] or 0), -x["scored_signals"], x["strategy_name"]))
     for rank, row in enumerate(rows, 1):
         row["rank"] = rank
     return {"strategies": rows, "ranking_method": "Win rate descending; completed WIN/LOSS sample size descending as tie-breaker."}
+
+
+
+@app.get("/api/strategy-manager")
+def strategy_manager_api():
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        raise HTTPException(status_code=404, detail="Strategy management is disabled for A11KSA candle-only mode.")
+    return get_strategy_manager_status()
 
 
 @app.get("/api/strategy-comparison")
