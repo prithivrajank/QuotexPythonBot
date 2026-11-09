@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 import os
 import threading
@@ -16,6 +17,8 @@ from strategy_registry import analyze_with_strategy
 from strategy_manager import get_active_strategy, apply_strategy_management
 from telegram_market_data import notify_new_candle, telegram_configured
 from health_monitor import record_candle, record_exception, record_signal as record_strategy_signal, record_telegram_result, set_component
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_SYMBOLS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
@@ -235,15 +238,23 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
 
 
 async def scheduled_refresh_loop() -> None:
-    """Fetch one watchlist symbol each interval only while the bot is ON."""
+    """Refresh symbols independently; recover from an unexpected iteration failure."""
     while True:
-        with _lock:
-            enabled = _bot_enabled
-        provider = os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower()
-        if enabled and provider not in ("otcharts", "a11ksa"):
-            await asyncio.to_thread(refresh_snapshot)
-            await asyncio.sleep(refresh_interval_seconds())
-        else:
-            # OTCharts free tier allows only 200 requests in its first month and no live stream.
-            # Avoid background polling; users must explicitly refresh one selected pair.
-            await asyncio.sleep(5 if not enabled else 60)
+        try:
+            with _lock:
+                enabled = _bot_enabled
+            provider = os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower()
+            if enabled and provider not in ("otcharts", "a11ksa"):
+                # Provider-level errors return an error snapshot; this guards unexpected failures.
+                await asyncio.to_thread(refresh_snapshot)
+                await asyncio.sleep(refresh_interval_seconds())
+            else:
+                # OTCharts/A11KSA remain manual-refresh only; no background provider polling.
+                await asyncio.sleep(5 if not enabled else 60)
+        except asyncio.CancelledError:
+            logger.info("Scheduled refresh loop cancelled; shutting down cleanly.")
+            raise
+        except Exception:
+            # One unexpected symbol/provider failure must not terminate the scheduler.
+            logger.exception("Unexpected scheduled refresh failure; retrying after 5 seconds.")
+            await asyncio.sleep(5)
