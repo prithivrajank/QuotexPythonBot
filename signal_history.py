@@ -274,6 +274,7 @@ def get_signal_score_statistics() -> dict[str, Any]:
             """SELECT
                    AVG(CASE WHEN outcome='WIN' THEN signal_score END) AS average_winning_score,
                    AVG(CASE WHEN outcome='LOSS' THEN signal_score END) AS average_losing_score,
+                   AVG(signal_score) AS average_signal_score,
                    MAX(signal_score) AS highest_score,
                    MIN(signal_score) AS lowest_score
                FROM signal_history
@@ -288,6 +289,10 @@ def get_signal_score_statistics() -> dict[str, Any]:
         "average_losing_score": (
             round(row["average_losing_score"], 2)
             if row["average_losing_score"] is not None else None
+        ),
+        "average_signal_score": (
+            round(row["average_signal_score"], 2)
+            if row["average_signal_score"] is not None else None
         ),
         "highest_score": row["highest_score"],
         "lowest_score": row["lowest_score"],
@@ -356,6 +361,7 @@ def history_summary() -> dict[str, Any]:
         },
         "average_score_winning_signals": score_statistics["average_winning_score"],
         "average_score_losing_signals": score_statistics["average_losing_score"],
+        "average_signal_score": score_statistics["average_signal_score"],
         "note": (
             "Descriptive historical comparison only; not verified trading "
             "returns or a prediction."
