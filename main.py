@@ -409,7 +409,10 @@ def strategies_api():
             "promotion_win_rate": management.get(row["strategy_name"], {}).get("win_rate"),
             "rate_source": management.get(row["strategy_name"], {}).get("rate_source"),
         })
-    rows.sort(key=lambda x: (x["win_rate"] is None, -(x["win_rate"] or 0), -x["scored_signals"], x["strategy_name"]))
+    rows.sort(key=lambda x: (
+        -(x.get("promotion_win_rate") if x.get("promotion_win_rate") is not None else -1),
+        -x["scored_signals"], x["strategy_name"]
+    ))
     for rank, row in enumerate(rows, 1):
         row["rank"] = rank
     return {"strategies": rows, "ranking_method": "Win rate descending; completed WIN/LOSS sample size descending as tie-breaker."}
