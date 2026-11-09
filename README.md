@@ -84,6 +84,19 @@ The adaptive pair filter reads completed outcomes from `signal_history.py` and c
 - This is a historical robustness check, not a guarantee of future performance. It uses directional close-to-close movement rather than binary-options payouts, and the overfit score is a percentage-point gap, not a probability.
 - Walk-forward validation is unavailable in `MARKET_DATA_PROVIDER=a11ksa` candle-only mode.
 
+
+## Strategy version manager
+
+- `strategy_registry.py` registers `EMA_RSI_V1` (1.0.0), `SCORE_ENGINE_V2` (2.0.0), and `BREAKOUT_V3` (3.0.0). Each analyzer returns `strategy_name` and `strategy_version` with the common CALL/PUT/WAIT analysis fields.
+- Live analysis uses `STRATEGY_NAME` from the environment; the default is `SCORE_ENGINE_V2`. Existing deployments need no new environment variable.
+- Signal-history SQLite schema is migrated additively with nullable strategy identity columns. New live signal rows store the active strategy name/version; old rows remain queryable and appear as `LEGACY` in strategy analytics.
+- `GET /api/strategies` returns registered strategies, historical signal counts, wins, losses, win rates, and automatic rank. Ranking sorts by completed-outcome win rate, then completed sample size. Pending, WAIT/skipped, and flat outcomes do not count in win-rate denominators.
+- `GET /api/strategy-comparison?symbol=EUR%2FUSD&timeframe=1m&expiry=1&candle_count=500` runs all registered strategies on the same historical candle sample and returns a ranked comparison.
+- The main dashboard includes a Strategy Leaderboard with Strategy, Signals, Wins, Losses, and Win Rate columns, plus a control to compare all strategies for the selected pair.
+- The existing `/api/backtest` remains backward-compatible and defaults to `SCORE_ENGINE_V2`; the Python `run_backtest()` function also accepts an optional `strategy_name`. Use `run_strategy_backtest()` for one strategy and `run_all_strategies()` / `run_strategy_comparison()` for all three.
+- A11KSA candle-only mode continues to disable signal analytics and strategy comparison endpoints.
+- Strategy comparison is a historical heuristic, not a guarantee. It uses prefix-only candle history and directional close-to-close outcomes, not binary-options payouts, spread, fees, slippage, or executable fills.
+
 ## Signal limitations
 
 CALL/PUT/WAIT labels, indicator summaries, and expiry suggestions are heuristic analysis, not validated probabilities, financial advice, or guaranteed predictions. OTC quotes are a broker-specific synthetic series and may differ from standard forex prices. Test against the source chart before relying on any result.
