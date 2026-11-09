@@ -243,7 +243,8 @@ def get_signal_grade_statistics() -> dict[str, dict[str, Any]]:
         rows = conn.execute(
             """SELECT signal_grade,
                       SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) AS wins,
-                      SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) AS losses
+                      SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) AS losses,
+                      COUNT(*) AS total_signals
                FROM signal_history
                WHERE signal_grade IN ('STRONG','MODERATE','WEAK')
                GROUP BY signal_grade"""
@@ -260,6 +261,7 @@ def get_signal_grade_statistics() -> dict[str, dict[str, Any]]:
             "wins": wins,
             "losses": losses,
             "win_rate": round(wins / scored * 100, 2) if scored else None,
+            "total_signals": int(row["total_signals"] or 0) if row else 0,
         }
     return result
 
@@ -319,19 +321,15 @@ def history_summary() -> dict[str, Any]:
                GROUP BY symbol ORDER BY symbol"""
         ).fetchall()
 
-        score_averages = conn.execute(
-            """SELECT
-                   AVG(CASE WHEN outcome='WIN' THEN signal_score END) AS avg_win_score,
-                   AVG(CASE WHEN outcome='LOSS' THEN signal_score END) AS avg_loss_score
-               FROM signal_history"""
-        ).fetchone()
-
     by_outcome = {row["outcome"]: row["count"] for row in counts}
     wins = by_outcome.get("WIN", 0)
     losses = by_outcome.get("LOSS", 0)
     scored = wins + losses
 
     # Keep every existing summary key and add the requested statistics.
+    grade_statistics = get_signal_grade_statistics()
+    asset_statistics = get_asset_statistics()
+    score_statistics = get_signal_score_statistics()
     return {
         "total": sum(by_outcome.values()),
         "wins": wins,
@@ -346,7 +344,7 @@ def history_summary() -> dict[str, Any]:
                 "scored": stats["wins"] + stats["losses"],
                 "win_rate_pct": stats["win_rate"],
             }
-            for grade, stats in get_signal_grade_statistics().items()
+            for grade, stats in grade_statistics.items()
         },
         "win_rate_by_asset": {
             asset: {
@@ -354,10 +352,10 @@ def history_summary() -> dict[str, Any]:
                 "scored": stats["wins"] + stats["losses"],
                 "win_rate_pct": stats["win_rate"],
             }
-            for asset, stats in get_asset_statistics().items()
+            for asset, stats in asset_statistics.items()
         },
-        "average_score_winning_signals": get_signal_score_statistics()["average_winning_score"],
-        "average_score_losing_signals": get_signal_score_statistics()["average_losing_score"],
+        "average_score_winning_signals": score_statistics["average_winning_score"],
+        "average_score_losing_signals": score_statistics["average_losing_score"],
         "note": (
             "Descriptive historical comparison only; not verified trading "
             "returns or a prediction."
