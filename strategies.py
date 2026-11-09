@@ -1,9 +1,10 @@
-"""Read-only technical indicators and heuristic analysis for OHLC candles."""
+"""Read-only technical indicators and scored heuristic analysis for OHLC candles."""
 from __future__ import annotations
 
 import pandas as pd
 
 REQUIRED = {"open", "high", "low", "close"}
+STRATEGY_VERSION = "signal-score-v0.3"
 
 
 def _frame(candles: list[dict]) -> pd.DataFrame:
@@ -14,7 +15,13 @@ def _frame(candles: list[dict]) -> pd.DataFrame:
         return pd.DataFrame(columns=["time", "open", "high", "low", "close"])
     for col in REQUIRED:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    return df.dropna(subset=list(REQUIRED)).reset_index(drop=True)
+    df = df.dropna(subset=list(REQUIRED)).reset_index(drop=True)
+    valid = (
+        (df["high"] >= df["low"])
+        & (df["high"] >= df[["open", "close"]].max(axis=1))
+        & (df["low"] <= df[["open", "close"]].min(axis=1))
+    )
+    return df.loc[valid].reset_index(drop=True)
 
 
 def _indicators(df: pd.DataFrame) -> dict[str, pd.Series]:
@@ -27,22 +34,33 @@ def _indicators(df: pd.DataFrame) -> dict[str, pd.Series]:
     loss = (-delta.clip(upper=0)).ewm(alpha=1 / 14, adjust=False).mean()
     rs = gain / loss.replace(0, float("nan"))
     rsi = 100 - (100 / (1 + rs))
+    rsi = rsi.mask((loss == 0) & (gain > 0), 100.0)
+    rsi = rsi.mask((gain == 0) & (loss > 0), 0.0)
+    rsi = rsi.mask((gain == 0) & (loss == 0), 50.0)
 
-    macd_line = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
-    macd_signal = macd_line.ewm(span=9, adjust=False).mean()
-    macd_hist = macd_line - macd_signal
+    macd = close.ewm(span=12, adjust=False).mean() - close.ewm(span=26, adjust=False).mean()
+    macd_signal = macd.ewm(span=9, adjust=False).mean()
+    macd_hist = macd - macd_signal
+
+    previous_close = close.shift(1)
+    true_range = pd.concat(
+        [
+            df["high"] - df["low"],
+            (df["high"] - previous_close).abs(),
+            (df["low"] - previous_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr14 = true_range.ewm(alpha=1 / 14, adjust=False, min_periods=14).mean()
+    atr_average = atr14.shift(1).rolling(20, min_periods=10).mean()
 
     bb_mid = close.rolling(20, min_periods=20).mean()
     bb_std = close.rolling(20, min_periods=20).std(ddof=0)
     return {
-        "ema9": ema9,
-        "ema21": ema21,
-        "rsi14": rsi,
-        "macd": macd_line,
-        "macd_signal": macd_signal,
-        "macd_hist": macd_hist,
-        "bb_mid": bb_mid,
-        "bb_upper": bb_mid + 2 * bb_std,
+        "ema9": ema9, "ema21": ema21, "rsi14": rsi,
+        "macd": macd, "macd_signal": macd_signal, "macd_hist": macd_hist,
+        "atr14": atr14, "atr_average": atr_average,
+        "bb_mid": bb_mid, "bb_upper": bb_mid + 2 * bb_std,
         "bb_lower": bb_mid - 2 * bb_std,
     }
 
@@ -53,96 +71,164 @@ def _last(series: pd.Series):
     return float(series.iloc[-1])
 
 
+def _empty_analysis(reason: str, candles_used: int) -> dict:
+    return {
+        "signal": "WAIT", "reason": reason,
+        "expiry_recommendation_minutes": None,
+        "expiry_reason": "WAIT signal: no expiry recommended",
+        "signal_strength": "LOW",
+        "signal_score": 0, "signal_grade": "WAIT",
+        "rsi_14": None, "ema_9": None, "ema_21": None,
+        "macd": None, "macd_signal": None, "macd_histogram": None,
+        "bollinger_upper": None, "bollinger_middle": None, "bollinger_lower": None,
+        "support_20": None, "resistance_20": None,
+        "atr_14": None, "atr_recent_average": None, "atr_low_volatility": None,
+        "candles_used": candles_used, "strategy_version": STRATEGY_VERSION,
+    }
+
+
 def analyze_candles(candles: list[dict], min_rows: int = 30) -> dict:
-    """Return CALL/PUT/WAIT plus indicator context; not a validated trading system."""
+    """Return scored CALL/PUT/WAIT analysis with backward-compatible fields."""
     df = _frame(candles)
-    if len(df) < min_rows:
-        return {
-            "signal": "WAIT",
-            "reason": f"Need at least {min_rows} valid candles",
-            "candles_used": len(df),
-            "strategy_version": "indicator-context-0.2",
-        }
+    if len(df) < max(min_rows, 21):
+        return _empty_analysis(
+            f"Need at least {max(min_rows, 21)} valid candles", len(df)
+        )
 
     ind = _indicators(df)
-    close = df["close"]
-    last_rsi = _last(ind["rsi14"])
-    bullish = ind["ema9"].iloc[-1] > ind["ema21"].iloc[-1] and close.iloc[-1] > df["open"].iloc[-1]
-    bearish = ind["ema9"].iloc[-1] < ind["ema21"].iloc[-1] and close.iloc[-1] < df["open"].iloc[-1]
+    last = df.iloc[-1]
+    ema9, ema21 = _last(ind["ema9"]), _last(ind["ema21"])
+    rsi = _last(ind["rsi14"])
+    macd_value = _last(ind["macd"])
+    macd_signal_value = _last(ind["macd_signal"])
+    macd_hist = _last(ind["macd_hist"])
+    previous_hist = _last(ind["macd_hist"].iloc[:-1])
+    atr14, atr_average = _last(ind["atr14"]), _last(ind["atr_average"])
 
-    if bullish and last_rsi is not None and 50 <= last_rsi <= 68:
-        signal, reason = "CALL", "EMA(9) above EMA(21), bullish latest candle, RSI in momentum range"
-    elif bearish and last_rsi is not None and 32 <= last_rsi <= 50:
-        signal, reason = "PUT", "EMA(9) below EMA(21), bearish latest candle, RSI in momentum range"
+    # Previous 20-candle levels exclude the current candle.
+    previous_20 = df.iloc[-21:-1]
+    support = float(previous_20["low"].min())
+    resistance = float(previous_20["high"].max())
+
+    parts = {
+        "ema_trend_alignment": 0,
+        "rsi_momentum_alignment": 0,
+        "macd_histogram_alignment": 0,
+        "strong_candle_body": 0,
+        "breakout_confirmation": 0,
+    }
+    direction = None
+    sign = 0
+
+    # Strict direction filter: CALL RSI 55-70; PUT RSI 30-45.
+    if ema9 is not None and ema21 is not None and rsi is not None:
+        if ema9 > ema21 and 55 <= rsi <= 70:
+            direction, sign = "CALL", 1
+        elif ema9 < ema21 and 30 <= rsi <= 45:
+            direction, sign = "PUT", -1
+
+    reasons = []
+    if direction is not None:
+        parts["ema_trend_alignment"] = 2
+        parts["rsi_momentum_alignment"] = 2
+
+        # MACD earns points only if aligned and improving vs previous candle.
+        macd_aligned = macd_hist is not None and macd_hist * sign > 0
+        macd_improving = (
+            previous_hist is not None and macd_hist is not None
+            and (macd_hist > previous_hist if sign > 0 else macd_hist < previous_hist)
+        )
+        if macd_aligned and macd_improving:
+            parts["macd_histogram_alignment"] = 2
+            reasons.append("MACD histogram aligned and improving")
+
+        candle_range = max(float(last["high"] - last["low"]), 1e-12)
+        body_ratio = abs(float(last["close"] - last["open"])) / candle_range
+        candle_aligned = (
+            float(last["close"]) > float(last["open"])
+            if sign > 0 else float(last["close"]) < float(last["open"])
+        )
+        if candle_aligned and body_ratio > 0.60:
+            parts["strong_candle_body"] = 2
+            reasons.append("Strong candle body exceeds 60% of range")
+
+        breakout = (
+            float(last["close"]) > resistance
+            if sign > 0 else float(last["close"]) < support
+        )
+        if breakout:
+            parts["breakout_confirmation"] = 2
+            reasons.append("Previous 20-candle breakout confirmed")
+
+    score = sum(parts.values())
+    low_volatility = (
+        atr14 is not None and atr_average is not None and atr14 < atr_average
+    )
+
+    # Requested score bands.
+    if direction is None or score <= 3:
+        signal, grade, strength = "WAIT", "WAIT", "LOW"
+        expiry = None
+        expiry_reason = "WAIT signal: no expiry recommended"
+        reason = (
+            "EMA trend and RSI do not align; CALL requires RSI 55-70 "
+            "and PUT requires RSI 30-45"
+            if direction is None else "Score 0-3: insufficient confirmation; WAIT"
+        )
     else:
-        signal, reason = "WAIT", "Trend/candle/RSI filters do not align"
-
-    support = float(df["low"].tail(20).min())
-    resistance = float(df["high"].tail(20).max())
-
-    # Expiry hint is a transparent heuristic, not a probability or win guarantee.
-    expiry_recommendation = None
-    expiry_reason = "WAIT signal: no expiry recommended"
-    signal_strength = "LOW"
-    if signal in {"CALL", "PUT"}:
-        direction = 1 if signal == "CALL" else -1
-        last_row = df.iloc[-1]
-        candle_range = max(float(last_row["high"] - last_row["low"]), 1e-12)
-        body_ratio = abs(float(last_row["close"] - last_row["open"])) / candle_range
-        last_three = df.tail(3)
-        aligned_candles = sum(
-            (float(row["close"]) > float(row["open"])) if direction > 0
-            else (float(row["close"]) < float(row["open"]))
-            for _, row in last_three.iterrows()
-        )
-        trend_aligned = (float(ind["ema9"].iloc[-1]) - float(ind["ema21"].iloc[-1])) * direction > 0
-        macd_aligned = float(ind["macd_hist"].iloc[-1]) * direction > 0
-        current_candle_aligned = (
-            float(last_row["close"]) > float(last_row["open"] if direction > 0 else last_row["close"])
-            if direction > 0 else float(last_row["close"]) < float(last_row["open"])
-        )
-        macd_hist = float(ind["macd_hist"].iloc[-1])
-        previous_macd_hist = float(ind["macd_hist"].iloc[-2])
-        macd_momentum_increasing = (
-            macd_hist > previous_macd_hist if direction > 0 else macd_hist < previous_macd_hist
-        )
-        # Prefer 1 minute when momentum is strong and immediate; prefer 2 minutes
-        # when direction is aligned but the latest candle is less decisive.
-        if (
-            trend_aligned and macd_aligned and macd_momentum_increasing
-            and current_candle_aligned and body_ratio >= 0.65
-        ):
-            expiry_recommendation = 1
-            expiry_reason = "Trend and MACD align, momentum is increasing, and latest candle body is strong; heuristic favours 1 minute"
-            signal_strength = "MODERATE"
-        elif trend_aligned and macd_aligned and aligned_candles >= 2:
-            expiry_recommendation = 2
-            expiry_reason = "Trend and MACD align across multiple candles, but immediate momentum is less decisive; heuristic favours 2 minutes"
-            signal_strength = "MODERATE"
+        signal = direction
+        if score <= 6:
+            grade, strength = "WEAK", "LOW"
+        elif score <= 8:
+            grade, strength = "MODERATE", "MODERATE"
         else:
-            expiry_recommendation = 1
-            expiry_reason = "Trend confirmation is weak or mixed; 1 minute is only a short-duration heuristic, consider WAIT rather than treating this as a strong entry"
-            signal_strength = "LOW"
+            grade, strength = "STRONG", "HIGH"
+
+        if low_volatility:
+            # Downgrade signal strength one level without changing raw score/grade.
+            strength = "LOW" if strength == "MODERATE" else "MODERATE"
+            expiry = 2
+            expiry_reason = (
+                "ATR(14) is below recent average volatility; signal strength "
+                "downgraded and aggressive 1-minute expiry avoided"
+            )
+            reasons.append("ATR(14) below recent average volatility")
+        else:
+            expiry = 1 if score >= 7 else 2
+            expiry_reason = (
+                "Confirmation score supports a 1-minute heuristic expiry"
+                if expiry == 1
+                else "Lower confirmation score favours a less aggressive 2-minute heuristic expiry"
+            )
+        reason = "; ".join(reasons) if reasons else "EMA and RSI are aligned"
 
     return {
+        # Existing response field names retained.
         "signal": signal,
         "reason": reason,
-        "expiry_recommendation_minutes": expiry_recommendation,
+        "expiry_recommendation_minutes": expiry,
         "expiry_reason": expiry_reason,
-        "signal_strength": signal_strength,
-        "rsi_14": round(last_rsi, 2) if last_rsi is not None else None,
-        "ema_9": round(float(ind["ema9"].iloc[-1]), 6),
-        "ema_21": round(float(ind["ema21"].iloc[-1]), 6),
-        "macd": round(_last(ind["macd"]), 7) if _last(ind["macd"]) is not None else None,
-        "macd_signal": round(_last(ind["macd_signal"]), 7) if _last(ind["macd_signal"]) is not None else None,
-        "macd_histogram": round(_last(ind["macd_hist"]), 7) if _last(ind["macd_hist"]) is not None else None,
+        "signal_strength": strength,
+        "rsi_14": round(rsi, 2) if rsi is not None else None,
+        "ema_9": round(ema9, 6) if ema9 is not None else None,
+        "ema_21": round(ema21, 6) if ema21 is not None else None,
+        "macd": round(macd_value, 7) if macd_value is not None else None,
+        "macd_signal": round(macd_signal_value, 7) if macd_signal_value is not None else None,
+        "macd_histogram": round(macd_hist, 7) if macd_hist is not None else None,
         "bollinger_upper": round(_last(ind["bb_upper"]), 6) if _last(ind["bb_upper"]) is not None else None,
         "bollinger_middle": round(_last(ind["bb_mid"]), 6) if _last(ind["bb_mid"]) is not None else None,
         "bollinger_lower": round(_last(ind["bb_lower"]), 6) if _last(ind["bb_lower"]) is not None else None,
         "support_20": round(support, 6),
         "resistance_20": round(resistance, 6),
+        # New response fields.
+        "signal_score": int(score),
+        "signal_grade": grade,
+        "score_breakdown": parts,
+        "atr_14": round(atr14, 7) if atr14 is not None else None,
+        "atr_recent_average": round(atr_average, 7) if atr_average is not None else None,
+        "atr_low_volatility": bool(low_volatility),
         "candles_used": len(df),
-        "strategy_version": "indicator-context-0.2",
+        "strategy_version": STRATEGY_VERSION,
     }
 
 
@@ -150,35 +236,36 @@ def build_chart_data(candles: list[dict]) -> dict:
     """Build serializable candlestick, EMA, Bollinger, and MACD chart series."""
     df = _frame(candles)
     if df.empty:
-        return {"candles": [], "ema9": [], "ema21": [], "bbUpper": [], "bbMiddle": [],
-                "bbLower": [], "support20": [], "resistance20": [], "macd": [], "macdSignal": [], "macdHistogram": []}
+        return {
+            "candles": [], "ema9": [], "ema21": [], "bbUpper": [],
+            "bbMiddle": [], "bbLower": [], "support20": [],
+            "resistance20": [], "macd": [], "macdSignal": [],
+            "macdHistogram": [],
+        }
+
     ind = _indicators(df)
     candle_rows = []
     for _, row in df.iterrows():
-        timestamp = int(row["time"])
         candle_rows.append({
-            "time": timestamp,
-            "open": float(row["open"]),
-            "high": float(row["high"]),
-            "low": float(row["low"]),
+            "time": int(row["time"]), "open": float(row["open"]),
+            "high": float(row["high"]), "low": float(row["low"]),
             "close": float(row["close"]),
         })
 
     def line(series: pd.Series) -> list[dict]:
-        points = []
-        for index, value in enumerate(series):
-            if pd.notna(value):
-                points.append({"time": int(df.iloc[index]["time"]), "value": float(value)})
-        return points
+        return [
+            {"time": int(df.iloc[i]["time"]), "value": float(value)}
+            for i, value in enumerate(series) if pd.notna(value)
+        ]
 
-    histogram = []
-    for index, value in enumerate(ind["macd_hist"]):
-        if pd.notna(value):
-            histogram.append({
-                "time": int(df.iloc[index]["time"]),
-                "value": float(value),
-                "color": "#26a69a" if value >= 0 else "#ef5350",
-            })
+    histogram = [
+        {
+            "time": int(df.iloc[i]["time"]),
+            "value": float(value),
+            "color": "#26a69a" if value >= 0 else "#ef5350",
+        }
+        for i, value in enumerate(ind["macd_hist"]) if pd.notna(value)
+    ]
     support = df["low"].rolling(20, min_periods=1).min()
     resistance = df["high"].rolling(20, min_periods=1).max()
     return {
