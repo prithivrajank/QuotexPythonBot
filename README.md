@@ -85,6 +85,18 @@ The adaptive pair filter reads completed outcomes from `signal_history.py` and c
 - Walk-forward validation is unavailable in `MARKET_DATA_PROVIDER=a11ksa` candle-only mode.
 
 
+
+## Weekly performance and health report
+
+- `GET /api/weekly-report` generates a rolling seven-day UTC report as JSON.
+- `GET /api/weekly-report?format=html` renders the same report as a self-contained HTML page.
+- Both formats are also exported to `WEEKLY_REPORT_DIR` (default `/tmp/weekly_reports`) as timestamped `weekly_report_*.json` and `weekly_report_*.html` files. The JSON response includes the generated export paths.
+- The report includes total signals, wins/losses and overall win rate, strongest and weakest pair, strategy leaderboard, daily win-rate trend, and daily health-score trend.
+- Pair and strategy win rates use completed WIN/LOSS outcomes only. Pending, skipped and flat signals are excluded.
+- Health observations are recorded whenever `/api/health` is requested. They are not a continuous monitoring probe; daily averages/minimums/maximums are calculated from recorded observations only.
+- Signal history and health snapshots share the configured `DATABASE_PATH`. Configure persistent storage if reports must retain history across Render restarts. The report covers the last seven rolling days in UTC.
+- A11KSA candle-only mode continues to disable signal-based weekly reporting.
+
 ## Strategy version manager
 
 - `strategy_registry.py` registers `EMA_RSI_V1` (1.0.0), `SCORE_ENGINE_V2` (2.0.0), and `BREAKOUT_V3` (3.0.0). Each analyzer returns `strategy_name` and `strategy_version` with the common CALL/PUT/WAIT analysis fields.
