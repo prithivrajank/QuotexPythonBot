@@ -40,6 +40,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Quotex Demo Read-Only Signal Bot", version="0.6.0", lifespan=lifespan)
 
+@app.middleware("http")
+async def count_unhandled_http_exceptions(request, call_next):
+    try:
+        return await call_next(request)
+    except Exception:
+        record_exception("application")
+        raise
+
+
 # Process-local rankings cache. The database remains the source of truth.
 _RANKINGS_CACHE_TTL_SECONDS = 60
 _rankings_cache_lock = threading.Lock()
