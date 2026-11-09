@@ -33,39 +33,55 @@ from weekly_report import generate_weekly_report, record_health_snapshot, render
 from validation_dashboard import get_validation_payload, validation_csv_rows
 from production_checklist import run_production_audit, log_audit_report
 from resilience import run_resilience_suite, resilience_metrics
+from observability import metrics_snapshot, record_request
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Run a non-blocking startup audit. Warnings/failures are reported, not fatal
-    # to startup, so optional integrations cannot take down the existing service.
-    try:
-        startup_audit = await asyncio.to_thread(run_production_audit)
-        app.state.last_system_audit = startup_audit
-        log_audit_report(startup_audit)
-    except Exception:
-        logging.getLogger("production_audit").exception("Startup production audit failed unexpectedly.")
-    task = asyncio.create_task(scheduled_refresh_loop())
-    app.state.refresh_task = task
+    """Start background services and cancel them cleanly during application shutdown."""
+    async def startup_audit_task() -> None:
+        """Run the optional audit off the startup critical path."""
+        try:
+            report = await asyncio.to_thread(run_production_audit)
+            app.state.last_system_audit = report
+            log_audit_report(report)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.getLogger(__name__).exception("Startup production audit failed.")
+
+    audit_task = asyncio.create_task(startup_audit_task(), name="startup-production-audit")
+    refresh_task = asyncio.create_task(scheduled_refresh_loop(), name="scheduled-refresh")
+    app.state.audit_task = audit_task
+    app.state.refresh_task = refresh_task
     try:
         yield
     finally:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        for task in (refresh_task, audit_task):
+            task.cancel()
+        await asyncio.gather(refresh_task, audit_task, return_exceptions=True)
 
 
-app = FastAPI(title="Quotex Demo Read-Only Signal Bot", version="0.6.0", lifespan=lifespan)
+app = FastAPI(title="Quotex Demo Read-Only Signal Bot", version="1.0.1", lifespan=lifespan)
+
 
 @app.middleware("http")
 async def count_unhandled_http_exceptions(request, call_next):
+    """Track request execution time and record unhandled application exceptions."""
+    started = time.perf_counter()
     try:
         return await call_next(request)
     except Exception:
         record_exception("application")
         raise
+    finally:
+        record_request(time.perf_counter() - started)
+
+
+@app.get("/api/metrics")
+def process_metrics():
+    """Return process-local request execution and memory metrics."""
+    return metrics_snapshot()
 
 
 # Process-local rankings cache. The database remains the source of truth.
