@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
 import asyncio
 import os
+import threading
+import time
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -8,7 +10,13 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from data_collector import MarketDataError, connection_status, data_source_label, get_assets, get_candles
 from runtime import bot_status, get_snapshot, get_watchlist, refresh_snapshot, scheduled_refresh_loop, set_bot_enabled
-from signal_history import get_history, history_summary
+from signal_history import (
+    get_history,
+    get_pair_performance_rankings,
+    get_signal_grade_statistics,
+    get_signal_score_statistics,
+    history_summary,
+)
 from strategies import analyze_candles, build_chart_data
 
 
@@ -27,6 +35,48 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Quotex Demo Read-Only Signal Bot", version="0.6.0", lifespan=lifespan)
+
+# Process-local rankings cache. The database remains the source of truth.
+_RANKINGS_CACHE_TTL_SECONDS = 60
+_rankings_cache_lock = threading.Lock()
+_rankings_cache: dict[str, object] = {"expires_at": 0.0, "payload": None}
+
+
+def _cached_rankings_payload() -> dict:
+    now = time.monotonic()
+    with _rankings_cache_lock:
+        expires_at = float(_rankings_cache.get("expires_at", 0.0))
+        cached = _rankings_cache.get("payload")
+        if cached is not None and now < expires_at:
+            return dict(cached)
+
+        rankings = get_pair_performance_rankings()
+        grades = get_signal_grade_statistics()
+        scores = get_signal_score_statistics()
+        summary = history_summary()
+
+        eligible_grades = [
+            (grade, stats)
+            for grade, stats in grades.items()
+            if stats.get("win_rate") is not None
+            and (int(stats.get("wins", 0)) + int(stats.get("losses", 0))) > 0
+        ]
+        best_grade = (
+            sorted(eligible_grades, key=lambda item: (-item[1]["win_rate"], item[0]))[0][0]
+            if eligible_grades else None
+        )
+        payload = {
+            "rankings": rankings,
+            "top_5": rankings[:5],
+            "worst_5": list(reversed(rankings[-5:])),
+            "best_signal_grade": best_grade,
+            "average_signal_score": scores.get("average_signal_score"),
+            "overall_win_rate": summary.get("scored_win_rate_pct"),
+            "cache_ttl_seconds": _RANKINGS_CACHE_TTL_SECONDS,
+        }
+        _rankings_cache["payload"] = payload
+        _rankings_cache["expires_at"] = now + _RANKINGS_CACHE_TTL_SECONDS
+        return dict(payload)
 
 
 @app.get("/health")
@@ -274,6 +324,14 @@ async def refresh(asset: str | None = Query(None, min_length=3, max_length=40)):
     return result
 
 
+@app.get("/api/rankings")
+def rankings():
+    """Cached symbol performance rankings; refreshed at most once per 60 seconds."""
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        raise HTTPException(status_code=404, detail="Signal rankings are disabled for A11KSA candle-only mode.")
+    return _cached_rankings_payload()
+
+
 @app.get("/api/history")
 def history(limit: int = Query(50, ge=1, le=200)):
     if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
@@ -299,7 +357,7 @@ def dashboard():
 <section><h2>Signal summary</h2><p id='signal' class='signal'>WAIT · Waiting for data</p><p id='reason' class='muted'>Waiting for first scheduled refresh.</p><p id='expiry' class='pill'>Expiry suggestion: waiting for data</p><p id='candleWindow' class='muted'>Candle status: waiting for data</p><div class='grid'><div class='metric'>RSI (14)<strong id='rsi'>—</strong></div><div class='metric'>MACD histogram<strong id='macd'>—</strong></div><div class='metric'>Bollinger upper<strong id='bbupper'>—</strong></div><div class='metric'>Bollinger middle<strong id='bbmiddle'>—</strong></div><div class='metric'>Bollinger lower<strong id='bblower'>—</strong></div><div class='metric'>Support / resistance (20)<strong id='sr'>—</strong></div></div><p style='margin-top:14px'><button id='refresh'>Refresh selected pair (uses 1 request)</button></p><p class='warn'>CALL / PUT / WAIT are heuristic labels, not validated predictions, financial advice, or guarantees.</p></section>
 <section><h2>Live candlestick chart</h2><p class='muted'>Selected pair · 1-minute · Chart times shown in India Standard Time (IST). Candles with EMA(9), EMA(21), Bollinger Bands; MACD below. Data source follows MARKET_DATA_PROVIDER.</p><div id='priceChart' class='chart'></div><h3>MACD (12, 26, 9)</h3><div id='macdChart' class='macdchart'></div></section>
 <section><h2>Latest OHLC candles</h2><p id='candlestatus' class='muted'>Waiting for data.</p><div class='tablewrap'><table><thead><tr><th>Time (IST)</th><th>Open</th><th>High</th><th>Low</th><th>Close</th></tr></thead><tbody id='candles'><tr><td colspan='5'>No data returned yet.</td></tr></tbody></table></div></section>
-<section><h2>Signal history &amp; outcome comparison</h2><div class='grid' style='margin:12px 0'><div class='metric'>Total Signals<strong id='statTotalSignals'>—</strong></div><div class='metric'>Wins<strong id='statWins'>—</strong></div><div class='metric'>Losses<strong id='statLosses'>—</strong></div><div class='metric'>Win Rate<strong id='statWinRate'>—</strong></div><div class='metric'>Best Asset<strong id='statBestAsset'>—</strong></div><div class='metric'>Best Signal Grade<strong id='statBestGrade'>—</strong></div><div class='metric'>Average Signal Score<strong id='statAverageScore'>—</strong></div></div><p id='historySummary' class='muted'>Waiting for history…</p><small>Outcomes compare entry close with the close after five candles. This is a simplified historical comparison, not actual trading results. History on Render free ephemeral storage can be lost after restart/redeploy.</small><div class='tablewrap' style='margin-top:12px'><table><thead><tr><th>Signal time (UTC)</th><th>Signal</th><th>Entry</th><th>Exit</th><th>Outcome</th><th>Change %</th></tr></thead><tbody id='historyRows'><tr><td colspan='6'>No history yet.</td></tr></tbody></table></div></section>
+<section><h2>Signal history &amp; outcome comparison</h2><div class='grid' style='margin:12px 0'><div class='metric'>Total Signals<strong id='statTotalSignals'>—</strong></div><div class='metric'>Wins<strong id='statWins'>—</strong></div><div class='metric'>Losses<strong id='statLosses'>—</strong></div><div class='metric'>Win Rate<strong id='statWinRate'>—</strong></div><div class='metric'>Best Asset<strong id='statBestAsset'>—</strong></div><div class='metric'>Best Signal Grade<strong id='statBestGrade'>—</strong></div><div class='metric'>Average Signal Score<strong id='statAverageScore'>—</strong></div></div><h3>Pair performance ranking</h3><div class='grid'><div class='metric'><strong>Top 5 symbols</strong><div id='rankingTop5' class='muted'>Loading rankings…</div></div><div class='metric'><strong>Worst 5 symbols</strong><div id='rankingWorst5' class='muted'>Loading rankings…</div></div></div><div class='grid' style='margin-top:10px'><div class='metric'>Best signal grade<strong id='rankingBestGrade'>—</strong></div><div class='metric'>Average signal score<strong id='rankingAverageScore'>—</strong></div><div class='metric'>Overall win rate<strong id='rankingOverallWinRate'>—</strong></div></div><p id='rankingUpdated' class='muted'>Rankings refresh every 60 seconds.</p><p id='historySummary' class='muted'>Waiting for history…</p><small>Outcomes compare entry close with the close after five candles. This is a simplified historical comparison, not actual trading results. History on Render free ephemeral storage can be lost after restart/redeploy.</small><div class='tablewrap' style='margin-top:12px'><table><thead><tr><th>Signal time (UTC)</th><th>Signal</th><th>Entry</th><th>Exit</th><th>Outcome</th><th>Change %</th></tr></thead><tbody id='historyRows'><tr><td colspan='6'>No history yet.</td></tr></tbody></table></div></section>
 <script>
 const fmt=n=>n===null||n===undefined||!Number.isFinite(Number(n))?'—':Number(n).toFixed(5);
 let priceChart=null,macdChart=null,series={};
@@ -310,6 +368,7 @@ let watchlistSymbols=[];
 async function loadWatchlist(){try{const r=await fetch('/api/watchlist',{cache:'no-store'});const d=await r.json();watchlistSymbols=d.symbols||[];const select=document.getElementById('assetSelect');const current=select.value;select.innerHTML=watchlistSymbols.map(s=>'<option value="'+s+'">'+s+'</option>').join('');if(watchlistSymbols.includes(current))select.value=current;else if(watchlistSymbols.length)select.value=watchlistSymbols[0];document.getElementById('watchlistInfo').textContent='Configured pairs: '+watchlistSymbols.length+' · Approx refresh per pair: '+d.estimated_minutes_per_symbol+' minutes. Pair names depend on the selected provider.';await pollLatest();}catch(e){document.getElementById('watchlistInfo').textContent='Could not load watchlist: '+e.message;}}
 async function pollLatest(){try{const symbol=document.getElementById('assetSelect').value;const url='/api/latest'+(symbol?'?asset='+encodeURIComponent(symbol):'');const r=await fetch(url,{cache:'no-store'});const d=await r.json();updateSnapshot(d);}catch(e){document.getElementById('candlestatus').textContent='Could not read cached data: '+e.message;}}
 async function pollHistory(){try{const r=await fetch('/api/history?limit=20',{cache:'no-store'});const d=await r.json();if(!r.ok)throw new Error(d.detail||'History request failed');const s=d.summary||{};const pct=v=>v===null||v===undefined?'N/A':Number(v).toFixed(2)+'%';const score=v=>v===null||v===undefined?'N/A':Number(v).toFixed(2);const best=(items)=>Object.entries(items||{}).filter(([,v])=>(Number(v.wins||0)+Number(v.losses||0))>0&&v.win_rate!==null&&v.win_rate!==undefined).sort((a,b)=>Number(b[1].win_rate)-Number(a[1].win_rate))[0];const asset=best(s.win_rate_by_asset),grade=best(s.win_rate_by_signal_grade);document.getElementById('statTotalSignals').textContent=s.total??0;document.getElementById('statWins').textContent=s.wins??0;document.getElementById('statLosses').textContent=s.losses??0;document.getElementById('statWinRate').textContent=pct(s.scored_win_rate_pct);document.getElementById('statBestAsset').textContent=asset?asset[0]+' ('+pct(asset[1].win_rate)+')':'N/A';document.getElementById('statBestGrade').textContent=grade?grade[0]+' ('+pct(grade[1].win_rate)+')':'N/A';document.getElementById('statAverageScore').textContent=score(s.average_signal_score);document.getElementById('historySummary').textContent='Recorded: '+(s.total??0)+' · Wins: '+(s.wins??0)+' · Losses: '+(s.losses??0)+' · Flat: '+(s.flat??0)+' · Skipped WAIT: '+(s.skipped??0)+' · Pending: '+(s.pending??0)+' · Scored win rate: '+pct(s.scored_win_rate_pct);document.getElementById('historyRows').innerHTML=(d.records||[]).map(x=>'<tr><td>'+new Date(x.signal_time*1000).toISOString().replace('T',' ').slice(0,19)+'</td><td>'+x.signal+'</td><td>'+fmt(x.entry_price)+'</td><td>'+fmt(x.exit_price)+'</td><td class="'+(x.outcome==='WIN'?'history-good':x.outcome==='LOSS'?'history-bad':'')+'">'+x.outcome+'</td><td>'+(x.price_change_pct===null?'—':Number(x.price_change_pct).toFixed(5)+'%')+'</td></tr>').join('')||'<tr><td colspan="6">No history yet; it will populate after scheduled refresh.</td></tr>';}catch(e){document.getElementById('historySummary').textContent='History unavailable: '+e.message;}}
+async function pollRankings(){try{const r=await fetch('/api/rankings',{cache:'no-store'});const d=await r.json();if(!r.ok)throw new Error(d.detail||'Rankings request failed');const fmtPct=v=>v===null||v===undefined?'N/A':Number(v).toFixed(2)+'%';const fmtScore=v=>v===null||v===undefined?'N/A':Number(v).toFixed(2);const renderRows=items=>(items||[]).length?(items||[]).map((x,i)=>(i+1)+'. '+x.symbol+' · '+(x.win_rate===null?'N/A':fmtPct(x.win_rate))+' · '+x.category+' · '+x.wins+'W/'+x.losses+'L').join('<br>'):'No scored pairs yet';document.getElementById('rankingTop5').innerHTML=renderRows(d.top_5);document.getElementById('rankingWorst5').innerHTML=renderRows(d.worst_5);document.getElementById('rankingBestGrade').textContent=d.best_signal_grade||'N/A';document.getElementById('rankingAverageScore').textContent=fmtScore(d.average_signal_score);document.getElementById('rankingOverallWinRate').textContent=fmtPct(d.overall_win_rate);document.getElementById('rankingUpdated').textContent='Rankings refreshed: '+new Date().toLocaleTimeString()+' · Cache: '+(d.cache_ttl_seconds||60)+' seconds';}catch(e){document.getElementById('rankingUpdated').textContent='Rankings unavailable: '+e.message;}}
 async function refreshSelectedPair(silent=false){const b=document.getElementById('refresh');if(b.disabled&&!silent)return;if(!silent){b.disabled=true;b.textContent='Refreshing…';}try{const symbol=document.getElementById('assetSelect').value;const url='/api/refresh'+(symbol?'?asset='+encodeURIComponent(symbol):'');const r=await fetch(url,{method:'POST',cache:'no-store'});const d=await r.json();if(!r.ok)throw new Error(d.detail||'Refresh failed');updateSnapshot(d);await pollHistory();}catch(e){document.getElementById('candlestatus').textContent='Selected-pair refresh failed: '+e.message;}finally{if(!silent){b.disabled=false;b.textContent='Refresh selected pair (uses 1 request)';}}}
 async function manualRefresh(){return refreshSelectedPair(false);}
 let selectedRefreshTimer=null;
@@ -319,5 +378,5 @@ async function syncBotState(){try{const r=await fetch('/api/bot',{cache:'no-stor
 async function toggleBot(){const action=botIsOn?'off':'on';const r=await fetch('/api/bot/'+action,{method:'POST'});const d=await r.json();botIsOn=!!d.enabled;document.getElementById('botStatus').textContent='Bot status: '+(botIsOn?'ON':'OFF');document.getElementById('botToggle').textContent=botIsOn?'Turn bot OFF':'Turn bot ON';if(botIsOn&&!manualRefreshOnly)await refreshSelectedPair(true);}
 function startSelectedPairRefresh(){if(selectedRefreshTimer)clearInterval(selectedRefreshTimer);selectedRefreshTimer=setInterval(()=>{if(botIsOn&&!manualRefreshOnly)refreshSelectedPair(true)},60000);if(!manualRefreshOnly)document.getElementById('watchlistInfo').textContent='Selected pair auto-refresh: every 1 minute while bot is ON; background watchlist pauses when OFF.';}
 async function statusCheck(){try{const r=await fetch('/api/status');const d=await r.json();manualRefreshOnly=!!d.manual_refresh_only;document.getElementById('status').textContent=d.message;document.getElementById('providerInfo').textContent='Selected provider: '+(d.source||'unknown')+' · Market: '+(d.market_type||'provider-specific market')+(d.affiliation?' · '+d.affiliation:'');if(manualRefreshOnly){document.getElementById('watchlistInfo').textContent='OTCharts free tier: automatic refresh is disabled to preserve the 200-request first-month allowance. Use manual refresh for one pair at a time.';document.getElementById('botToggle').disabled=true;document.getElementById('botStatus').textContent='Manual refresh only (free API tier)';}}catch(e){document.getElementById('status').textContent='API status unavailable';}}
-initCharts();statusCheck();syncBotState();loadWatchlist();pollHistory();document.getElementById('botToggle').addEventListener('click',toggleBot);document.getElementById('refresh').addEventListener('click',manualRefresh);document.getElementById('assetSelect').addEventListener('change',async()=>{await pollLatest();if(botIsOn&&!manualRefreshOnly)await refreshSelectedPair(true);});startSelectedPairRefresh();setInterval(pollLatest,30000);setInterval(pollHistory,60000);
+initCharts();statusCheck();syncBotState();loadWatchlist();pollHistory();pollRankings();setInterval(pollRankings,60000);document.getElementById('botToggle').addEventListener('click',toggleBot);document.getElementById('refresh').addEventListener('click',manualRefresh);document.getElementById('assetSelect').addEventListener('change',async()=>{await pollLatest();if(botIsOn&&!manualRefreshOnly)await refreshSelectedPair(true);});startSelectedPairRefresh();setInterval(pollLatest,30000);setInterval(pollHistory,60000);
 </script></body></html>"""
