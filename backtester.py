@@ -1,126 +1,98 @@
-"""Timestamp-safe historical backtesting for the existing CALL/PUT/WAIT strategy.
-
-Signals are calculated using candles available up to the decision candle only.
-Entry is the decision candle close; exit is the close N candles later.
-This is a directional price-movement simulation, not a binary-options payout model.
-"""
+"""Timestamp-safe historical backtesting for registered strategy versions."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
-from strategies import STRATEGY_VERSION, analyze_candles
+from strategy_registry import analyze_with_strategy, get_strategy, list_strategies
 
 SUPPORTED_EXPIRIES = (1, 2, 3)
 MINIMUM_HISTORY = 30
 
 
 def _empty_stats(expiry: int) -> dict[str, Any]:
-    return {
-        "expiry": expiry,
-        "total_signals": 0,
-        "call_signals": 0,
-        "put_signals": 0,
-        "wait_signals": 0,
-        "wins": 0,
-        "losses": 0,
-        "win_rate": None,
-        "profit_factor": None,
-        "gross_profit_pct": 0.0,
-        "gross_loss_pct": 0.0,
-    }
+    return {"expiry": expiry, "total_signals": 0, "call_signals": 0,
+            "put_signals": 0, "wait_signals": 0, "wins": 0, "losses": 0,
+            "win_rate": None, "profit_factor": None,
+            "gross_profit_pct": 0.0, "gross_loss_pct": 0.0}
 
 
-def _evaluate_expiry(candles: list[dict], expiry: int) -> dict[str, Any]:
+def _evaluate_expiry(candles: list[dict], expiry: int,
+                     analyzer: Callable[[list[dict]], dict[str, Any]]) -> dict[str, Any]:
     stats = _empty_stats(expiry)
-    gross_profit = 0.0
-    gross_loss = 0.0
-
-    # Keep enough future candles to settle each trade. Prefix-only analysis
-    # prevents future candles from leaking into the signal calculation.
+    gross_profit = gross_loss = 0.0
     last_decision_index = len(candles) - expiry - 1
     for index in range(MINIMUM_HISTORY - 1, last_decision_index + 1):
-        history = candles[: index + 1]
-        analysis = analyze_candles(history)
+        analysis = analyzer(candles[:index + 1])
         signal = str(analysis.get("signal", "WAIT")).upper()
         stats["total_signals"] += 1
-
-        if signal == "WAIT":
-            stats["wait_signals"] += 1
-            continue
         if signal not in {"CALL", "PUT"}:
             stats["wait_signals"] += 1
             continue
-
         stats["call_signals" if signal == "CALL" else "put_signals"] += 1
-        entry = float(candles[index]["close"])
-        exit_price = float(candles[index + expiry]["close"])
+        entry, exit_price = float(candles[index]["close"]), float(candles[index + expiry]["close"])
         if entry <= 0:
             continue
-
-        move_pct = (exit_price - entry) / entry * 100.0
-        directional_return = move_pct if signal == "CALL" else -move_pct
-
-        if directional_return > 0:
+        move = (exit_price - entry) / entry * 100.0
+        directional = move if signal == "CALL" else -move
+        if directional > 0:
             stats["wins"] += 1
-            gross_profit += directional_return
-        elif directional_return < 0:
+            gross_profit += directional
+        elif directional < 0:
             stats["losses"] += 1
-            gross_loss += abs(directional_return)
-        # Equal entry/exit is neither a win nor a loss and is excluded from
-        # the win-rate denominator, but the signal remains in total_signals.
-
+            gross_loss += abs(directional)
     scored = stats["wins"] + stats["losses"]
-    stats["win_rate"] = round(stats["wins"] / scored * 100.0, 2) if scored else None
-    stats["gross_profit_pct"] = round(gross_profit, 6)
-    stats["gross_loss_pct"] = round(gross_loss, 6)
-    stats["profit_factor"] = (
-        round(gross_profit / gross_loss, 4) if gross_loss > 0
-        else (None if gross_profit == 0 else None)
-    )
+    stats["win_rate"] = round(stats["wins"] / scored * 100, 2) if scored else None
+    stats["gross_profit_pct"], stats["gross_loss_pct"] = round(gross_profit, 6), round(gross_loss, 6)
+    stats["profit_factor"] = round(gross_profit / gross_loss, 4) if gross_loss > 0 else None
     return stats
 
 
-def run_backtest(
-    candles: list[dict],
-    symbol: str,
-    expiry: int = 1,
-) -> dict[str, Any]:
-    """Backtest the strategy at 1/2/3-candle expiries on chronological OHLC."""
+def run_strategy_backtest(candles: list[dict], symbol: str, strategy_name: str,
+                          expiry: int = 1) -> dict[str, Any]:
+    """Run one registered strategy across 1/2/3-candle expiries."""
     if expiry not in SUPPORTED_EXPIRIES:
         raise ValueError("expiry must be 1, 2, or 3 candles")
-    minimum_candles = MINIMUM_HISTORY + max(SUPPORTED_EXPIRIES)
-    if len(candles) < minimum_candles:
-        raise ValueError(
-            f"At least {minimum_candles} candles are required to compare "
-            "all supported expiries (1, 2, and 3 candles)"
-        )
-
+    metadata = get_strategy(strategy_name)
+    minimum = MINIMUM_HISTORY + max(SUPPORTED_EXPIRIES)
+    if len(candles) < minimum:
+        raise ValueError(f"At least {minimum} candles are required to compare all supported expiries")
     ordered = sorted(candles, key=lambda row: int(row.get("time", 0)))
-    expiry_results = [_evaluate_expiry(ordered, value) for value in SUPPORTED_EXPIRIES]
-    selected = next(item for item in expiry_results if item["expiry"] == expiry)
+    analyzer = lambda history: analyze_with_strategy(history, metadata["name"])
+    comparisons = [_evaluate_expiry(ordered, e, analyzer) for e in SUPPORTED_EXPIRIES]
+    selected = next(item for item in comparisons if item["expiry"] == expiry)
+    eligible = [item for item in comparisons if item["wins"] + item["losses"]]
+    best = max(eligible, key=lambda item: (item["win_rate"], item["wins"] + item["losses"])) if eligible else None
+    return {**selected, "symbol": symbol, "best_asset": symbol,
+            "best_expiry": best["expiry"] if best else None,
+            "expiry_comparison": comparisons, "strategy_name": metadata["name"],
+            "strategy_version": metadata["version"], "candles_used": len(ordered),
+            "methodology": ("Signals use only candles up to each decision candle. Entry is its close; "
+                "exit is the close after the selected number of candles. Win rate excludes WAIT "
+                "and flat outcomes. Profit factor uses summed directional percentage moves, "
+                "not broker payout, fees, or executable fills.")}
 
-    eligible = [item for item in expiry_results if item["wins"] + item["losses"] > 0]
-    best = max(
-        eligible,
-        key=lambda item: (
-            item["win_rate"],
-            item["profit_factor"] if item["profit_factor"] is not None else -1,
-            item["wins"] + item["losses"],
-        ),
-    ) if eligible else None
 
-    return {
-        **selected,
-        "symbol": symbol,
-        "best_asset": symbol,
-        "best_expiry": best["expiry"] if best else None,
-        "expiry_comparison": expiry_results,
-        "strategy_version": STRATEGY_VERSION,
-        "candles_used": len(ordered),
-        "methodology": (
-            "Signals use only candles up to each decision candle. Entry is its close; "
-            "exit is the close after the selected number of candles. Win rate excludes "
-            "WAIT and flat outcomes. Profit factor uses summed directional percentage "
-            "moves, not broker payout, fees, or executable fills."
-        ),
-    }
+def run_all_strategies(candles: list[dict], symbol: str, expiry: int = 1) -> dict[str, Any]:
+    """Backtest every registered strategy and rank by win rate, then sample size."""
+    results = [run_strategy_backtest(candles, symbol, item["name"], expiry)
+               for item in list_strategies()]
+    ranked = sorted(results, key=lambda x: (
+        x["win_rate"] is None,
+        -(x["win_rate"] if x["win_rate"] is not None else 0),
+        -(x["wins"] + x["losses"]), x["strategy_name"]))
+    for rank, item in enumerate(ranked, 1):
+        item["rank"] = rank
+    return {"symbol": symbol, "expiry": expiry, "strategies": ranked,
+            "leader": ranked[0]["strategy_name"] if ranked and ranked[0]["win_rate"] is not None else None,
+            "ranking_method": "Win rate descending; completed WIN/LOSS sample size descending as tie-breaker."}
+
+
+def run_backtest(candles: list[dict], symbol: str, expiry: int = 1,
+                 strategy_name: str = "SCORE_ENGINE_V2") -> dict[str, Any]:
+    """Backward-compatible single-strategy backtest (defaults to SCORE_ENGINE_V2)."""
+    return run_strategy_backtest(candles, symbol, strategy_name, expiry)
+
+
+def run_strategy_comparison(candles: list[dict], symbol: str, expiry: int = 1) -> dict[str, Any]:
+    """Named alias for the all-strategy comparison report."""
+    return run_all_strategies(candles, symbol, expiry)
