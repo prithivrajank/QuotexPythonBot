@@ -201,13 +201,13 @@ async def market_stream(websocket: WebSocket):
     """Push genuine quote snapshots only when the selected provider has a quote stream."""
     await websocket.accept()
     websocket_connected()
-    provider = os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower()
     get_ticks = None
-    if provider == "quotexapi":
-        from quotexapi_provider import _ensure_connection, get_ticks as quotex_get_ticks
-        _ensure_connection()
-        get_ticks = quotex_get_ticks
     try:
+        provider = os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower()
+        if provider == "quotexapi":
+            from quotexapi_provider import _ensure_connection, get_ticks as quotex_get_ticks
+            _ensure_connection()
+            get_ticks = quotex_get_ticks
         while True:
             ticks = get_ticks() if get_ticks else []
             await websocket.send_json({
