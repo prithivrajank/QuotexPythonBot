@@ -43,6 +43,16 @@ Set provider-specific environment variables only in Render's Environment UI. Do 
 - `POST /api/refresh?asset=EURUSD_otc` — manual refresh; uses provider quota.
 - `/api/history?limit=50` — signal-history summary.
 
+## Adaptive pair performance filtering
+
+The adaptive pair filter reads completed outcomes from `signal_history.py` and caches per-symbol statistics for five minutes.
+
+- `GET /api/pair-performance` returns each pair's win rate, total signal count, scored trade count, recent-20 completed-trade win rate, average signal score, and classification.
+- Classifications: `PRIORITY` requires at least 20 scored trades and a win rate of at least 65%; `NORMAL` is at least 55% when the PRIORITY condition is not met; `WATCHLIST` is 45% to below 55% or an insufficient sample; `DISABLED` requires at least 15 scored trades and a win rate below 45%.
+- The signal runtime and `/api/analysis` return WAIT for DISABLED pairs with reason `Pair temporarily disabled due to low performance`. The runtime also suppresses Telegram candle notifications for those pairs.
+- The main dashboard shows Top Performing Pairs, Worst Performing Pairs, Disabled Pairs, and Priority Pairs. Dashboard polling reads the cached endpoint; the underlying statistics refresh every 300 seconds.
+- Win rate and recent win rate use completed WIN/LOSS outcomes only. Pending, WAIT/skipped, and flat records do not count as scored trades. Symbols with insufficient completed history remain WATCHLIST rather than being disabled based on a small sample.
+
 ## Historical backtesting
 
 - Open `/backtest` for the historical backtesting dashboard.
