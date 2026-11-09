@@ -1,0 +1,17 @@
+[run]
+branch = True
+source =
+    strategies
+    backtester
+    signal_history
+    pair_performance
+omit =
+    */tests/*
+    */.venv/*
+
+[report]
+show_missing = True
+skip_covered = False
+
+[html]
+directory = htmlcov
