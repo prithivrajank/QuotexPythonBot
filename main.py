@@ -23,7 +23,7 @@ from signal_history import (
     get_strategy_statistics,
 )
 from strategies import analyze_candles, build_chart_data
-from strategy_registry import list_strategies
+from strategy_registry import analyze_with_strategy, list_strategies
 
 
 @asynccontextmanager
@@ -308,7 +308,7 @@ def analysis(
     _validate_timeframe(timeframe_seconds)
     try:
         result = get_candles(asset, timeframe_seconds, limit)
-        summary = filter_analysis(asset, analyze_candles(result))
+        summary = filter_analysis(asset, analyze_with_strategy(result, os.getenv('STRATEGY_NAME', 'SCORE_ENGINE_V2')))
         return {
             "source": data_source_label(),
             "market_type": result[-1].get("market_type", "provider-specific market") if result else "provider-specific market",
