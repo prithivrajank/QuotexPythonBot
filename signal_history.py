@@ -20,7 +20,7 @@ _ADDITIVE_COLUMNS = {
     "macd_histogram": "REAL",
     "ema_9": "REAL",
     "ema_21": "REAL",
-    # rsi_14 already exists in the original schema.
+    "rsi_14": "REAL",
 }
 
 
@@ -203,6 +203,95 @@ def _win_rate(rows: list[sqlite3.Row]) -> dict[str, Any]:
     }
 
 
+
+
+def get_asset_statistics() -> dict[str, dict[str, Any]]:
+    """Return outcome statistics grouped by asset/symbol.
+
+    total_signals includes pending, skipped, and flat records; win_rate is
+    calculated only from signals with a WIN or LOSS outcome.
+    """
+    init_history()
+    with _connection() as conn:
+        rows = conn.execute(
+            """SELECT symbol,
+                      SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) AS wins,
+                      SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) AS losses,
+                      COUNT(*) AS total_signals
+               FROM signal_history
+               GROUP BY symbol ORDER BY symbol"""
+        ).fetchall()
+
+    result: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        wins = int(row["wins"] or 0)
+        losses = int(row["losses"] or 0)
+        scored = wins + losses
+        result[row["symbol"]] = {
+            "wins": wins,
+            "losses": losses,
+            "win_rate": round(wins / scored * 100, 2) if scored else None,
+            "total_signals": int(row["total_signals"] or 0),
+        }
+    return result
+
+
+def get_signal_grade_statistics() -> dict[str, dict[str, Any]]:
+    """Return WIN/LOSS statistics for STRONG, MODERATE, and WEAK grades."""
+    init_history()
+    with _connection() as conn:
+        rows = conn.execute(
+            """SELECT signal_grade,
+                      SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) AS wins,
+                      SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) AS losses
+               FROM signal_history
+               WHERE signal_grade IN ('STRONG','MODERATE','WEAK')
+               GROUP BY signal_grade"""
+        ).fetchall()
+
+    grouped = {row["signal_grade"]: row for row in rows}
+    result: dict[str, dict[str, Any]] = {}
+    for grade in ("STRONG", "MODERATE", "WEAK"):
+        row = grouped.get(grade)
+        wins = int(row["wins"] or 0) if row else 0
+        losses = int(row["losses"] or 0) if row else 0
+        scored = wins + losses
+        result[grade] = {
+            "wins": wins,
+            "losses": losses,
+            "win_rate": round(wins / scored * 100, 2) if scored else None,
+        }
+    return result
+
+
+def get_signal_score_statistics() -> dict[str, Any]:
+    """Return score averages for wins/losses and the observed score range."""
+    init_history()
+    with _connection() as conn:
+        row = conn.execute(
+            """SELECT
+                   AVG(CASE WHEN outcome='WIN' THEN signal_score END) AS average_winning_score,
+                   AVG(CASE WHEN outcome='LOSS' THEN signal_score END) AS average_losing_score,
+                   MAX(signal_score) AS highest_score,
+                   MIN(signal_score) AS lowest_score
+               FROM signal_history
+               WHERE signal_score IS NOT NULL"""
+        ).fetchone()
+
+    return {
+        "average_winning_score": (
+            round(row["average_winning_score"], 2)
+            if row["average_winning_score"] is not None else None
+        ),
+        "average_losing_score": (
+            round(row["average_losing_score"], 2)
+            if row["average_losing_score"] is not None else None
+        ),
+        "highest_score": row["highest_score"],
+        "lowest_score": row["lowest_score"],
+    }
+
+
 def history_summary() -> dict[str, Any]:
     """Return legacy totals plus additive grade/asset and score statistics."""
     init_history()
@@ -252,19 +341,23 @@ def history_summary() -> dict[str, Any]:
         "pending": by_outcome.get("PENDING", 0),
         "scored_win_rate_pct": round(wins / scored * 100, 2) if scored else None,
         "win_rate_by_signal_grade": {
-            row["group_name"]: _win_rate([row]) for row in grade_rows
+            grade: {
+                **stats,
+                "scored": stats["wins"] + stats["losses"],
+                "win_rate_pct": stats["win_rate"],
+            }
+            for grade, stats in get_signal_grade_statistics().items()
         },
         "win_rate_by_asset": {
-            row["group_name"]: _win_rate([row]) for row in asset_rows
+            asset: {
+                **stats,
+                "scored": stats["wins"] + stats["losses"],
+                "win_rate_pct": stats["win_rate"],
+            }
+            for asset, stats in get_asset_statistics().items()
         },
-        "average_score_winning_signals": (
-            round(score_averages["avg_win_score"], 2)
-            if score_averages["avg_win_score"] is not None else None
-        ),
-        "average_score_losing_signals": (
-            round(score_averages["avg_loss_score"], 2)
-            if score_averages["avg_loss_score"] is not None else None
-        ),
+        "average_score_winning_signals": get_signal_score_statistics()["average_winning_score"],
+        "average_score_losing_signals": get_signal_score_statistics()["average_losing_score"],
         "note": (
             "Descriptive historical comparison only; not verified trading "
             "returns or a prediction."
