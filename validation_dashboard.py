@@ -70,20 +70,25 @@ def get_validation_payload(now: datetime | None = None) -> dict[str, Any]:
                GROUP BY strategy_name, strategy_version""",
             (VALIDATION_LIMIT,),
         ).fetchall()
-        period_rows = conn.execute(
-            """SELECT
-                 CASE WHEN signal_time >= ? THEN '24h'
-                      WHEN signal_time >= ? THEN '7d'
-                      WHEN signal_time >= ? THEN '30d' END AS period,
-                 COUNT(*) AS total_signals,
-                 SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) AS wins,
-                 SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) AS losses
-               FROM signal_history
-               WHERE signal_time >= ?
-               GROUP BY period""",
-            (int((now-timedelta(hours=24)).timestamp()),
-             int((now-timedelta(days=7)).timestamp()), since, since),
-        ).fetchall()
+        period_rows = []
+        for period, cutoff in (
+            ("24h", int((now-timedelta(hours=24)).timestamp())),
+            ("7d", int((now-timedelta(days=7)).timestamp())),
+            ("30d", since),
+        ):
+            aggregate = conn.execute(
+                """SELECT COUNT(*) AS total_signals,
+                          SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) AS wins,
+                          SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) AS losses
+                   FROM signal_history WHERE signal_time >= ?""",
+                (cutoff,),
+            ).fetchone()
+            period_rows.append({
+                "period": period,
+                "total_signals": aggregate["total_signals"],
+                "wins": aggregate["wins"],
+                "losses": aggregate["losses"],
+            })
 
     grade_map = {row["signal_grade"]: row for row in grades}
     grade_metrics = {}
