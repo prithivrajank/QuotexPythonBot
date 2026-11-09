@@ -23,6 +23,7 @@ _LAST_CANDLE_TIME: int | None = None
 _LAST_SIGNAL_TIME: int | None = None
 _CANDLE_COUNT = 0
 _SIGNAL_COUNT = 0
+_WEBSOCKET_CLIENTS = 0
 
 
 def _now() -> str:
@@ -91,11 +92,19 @@ def record_telegram_result(result: dict[str, Any] | None) -> None:
 
 
 def websocket_connected() -> None:
-    set_component("websocket", "healthy", "At least one market WebSocket client is connected.")
+    global _WEBSOCKET_CLIENTS
+    with _LOCK:
+        _WEBSOCKET_CLIENTS += 1
+        count = _WEBSOCKET_CLIENTS
+    set_component("websocket", "healthy", f"{count} market WebSocket client(s) connected.")
 
 
 def websocket_disconnected() -> None:
-    set_component("websocket", "degraded", "No active market WebSocket client is connected.")
+    global _WEBSOCKET_CLIENTS
+    with _LOCK:
+        _WEBSOCKET_CLIENTS = max(0, _WEBSOCKET_CLIENTS - 1)
+        count = _WEBSOCKET_CLIENTS
+    set_component("websocket", "healthy" if count else "degraded", f"{count} active market WebSocket client(s).")
 
 
 def database_check() -> dict[str, Any]:
