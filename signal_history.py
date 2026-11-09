@@ -421,3 +421,23 @@ def history_summary() -> dict[str, Any]:
             "returns or a prediction."
         ),
     }
+
+
+def get_pair_performance_records() -> dict[str, list[dict[str, Any]]]:
+    """Return complete per-symbol signal records for adaptive pair filtering.
+
+    This intentionally exposes only the columns needed by the performance
+    layer; legacy history APIs and their response shapes remain unchanged.
+    """
+    init_history()
+    with _connection() as conn:
+        rows = conn.execute(
+            """SELECT symbol, signal_time, outcome, signal_score
+               FROM signal_history
+               ORDER BY symbol ASC, signal_time DESC, id DESC"""
+        ).fetchall()
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(row["symbol"], []).append(dict(row))
+    return grouped
