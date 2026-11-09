@@ -11,7 +11,8 @@ from typing import Any
 from data_collector import MarketDataError, data_source_label, get_candles
 from signal_history import record_signal, score_due_outcomes
 from pair_performance import filter_analysis, get_pair_status
-from strategies import analyze_candles, build_chart_data
+from strategies import build_chart_data
+from strategy_registry import analyze_with_strategy
 from telegram_market_data import notify_new_candle, telegram_configured
 from health_monitor import record_candle, record_exception, record_signal as record_strategy_signal, record_telegram_result, set_component
 
@@ -156,7 +157,8 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
                 _snapshots[selected] = snapshot
             return dict(snapshot)
         try:
-            analysis = filter_analysis(selected, analyze_candles(candles))
+            active_strategy = os.getenv("STRATEGY_NAME", "SCORE_ENGINE_V2").strip().upper()
+            analysis = filter_analysis(selected, analyze_with_strategy(candles, active_strategy))
             record_strategy_signal(candles[-1].get("time"), analysis.get("signal"))
         except Exception:
             record_exception("strategy")
