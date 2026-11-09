@@ -236,6 +236,60 @@ def get_asset_statistics() -> dict[str, dict[str, Any]]:
     return result
 
 
+def get_pair_performance_rankings() -> list[dict[str, Any]]:
+    """Return per-symbol performance, score averages, and a sample-size-aware rank."""
+    init_history()
+    with _connection() as conn:
+        rows = conn.execute(
+            """SELECT symbol,
+                      COUNT(*) AS total_signals,
+                      SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) AS wins,
+                      SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) AS losses,
+                      AVG(signal_score) AS average_signal_score
+               FROM signal_history
+               GROUP BY symbol"""
+        ).fetchall()
+
+    rankings: list[dict[str, Any]] = []
+    for row in rows:
+        wins = int(row["wins"] or 0)
+        losses = int(row["losses"] or 0)
+        scored = wins + losses
+        win_rate = round(wins / scored * 100, 2) if scored else None
+
+        if scored >= 10 and win_rate is not None and win_rate < 45:
+            category = "AVOID"
+        elif scored >= 20 and win_rate is not None and win_rate >= 65:
+            category = "HOT"
+        elif scored >= 10 and win_rate is not None and win_rate >= 55:
+            category = "GOOD"
+        else:
+            category = "NEUTRAL"
+
+        average_score = row["average_signal_score"]
+        rankings.append({
+            "symbol": row["symbol"],
+            "total_signals": int(row["total_signals"] or 0),
+            "wins": wins,
+            "losses": losses,
+            "win_rate": win_rate,
+            "average_signal_score": (
+                round(average_score, 2) if average_score is not None else None
+            ),
+            "category": category,
+        })
+
+    # Symbols without scored outcomes are placed last, not treated as 0% performers.
+    rankings.sort(
+        key=lambda item: (
+            item["win_rate"] is None,
+            -(item["win_rate"] if item["win_rate"] is not None else 0),
+            item["symbol"],
+        )
+    )
+    return rankings
+
+
 def get_signal_grade_statistics() -> dict[str, dict[str, Any]]:
     """Return WIN/LOSS statistics for STRONG, MODERATE, and WEAK grades."""
     init_history()
