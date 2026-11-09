@@ -6,6 +6,8 @@ import os
 import threading
 import time
 from datetime import datetime, timezone
+import logging
+import json
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
@@ -29,10 +31,19 @@ from strategy_registry import analyze_with_strategy, list_strategies
 from strategy_manager import get_active_strategy, get_strategy_manager_status, apply_strategy_management
 from weekly_report import generate_weekly_report, record_health_snapshot, render_weekly_report_html
 from validation_dashboard import get_validation_payload, validation_csv_rows
+from production_checklist import run_production_audit, log_audit_report
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Run a non-blocking startup audit. Warnings/failures are reported, not fatal
+    # to startup, so optional integrations cannot take down the existing service.
+    try:
+        startup_audit = await asyncio.to_thread(run_production_audit)
+        app.state.last_system_audit = startup_audit
+        log_audit_report(startup_audit)
+    except Exception:
+        logging.getLogger("production_audit").exception("Startup production audit failed unexpectedly.")
     task = asyncio.create_task(scheduled_refresh_loop())
     app.state.refresh_task = task
     try:
@@ -102,6 +113,59 @@ def _cached_rankings_payload() -> dict:
 @app.get("/health")
 def health():
     return {"status": "ok", "time_utc": datetime.now(timezone.utc).isoformat()}
+
+
+
+@app.get("/api/system/audit")
+def system_audit_api():
+    """Run all production-readiness checks and return the latest audit report."""
+    try:
+        report = run_production_audit()
+        log_audit_report(report)
+        return report
+    except Exception:
+        logging.getLogger("production_audit").exception("On-demand production audit failed.")
+        raise HTTPException(status_code=500, detail="Production audit could not be completed.") from None
+
+
+@app.get("/api/system/audit/export")
+def system_audit_export():
+    """Download the current audit as audit_report.json."""
+    try:
+        report = run_production_audit()
+        log_audit_report(report)
+        body = json.dumps(report, indent=2, sort_keys=True)
+        return StreamingResponse(
+            iter([body]),
+            media_type="application/json",
+            headers={"Content-Disposition": 'attachment; filename="audit_report.json"'},
+        )
+    except Exception:
+        logging.getLogger("production_audit").exception("Audit report export failed.")
+        raise HTTPException(status_code=500, detail="Audit report export could not be generated.") from None
+
+
+@app.get("/system-audit", response_class=HTMLResponse)
+def system_audit_page():
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        return RedirectResponse(url="/market", status_code=307)
+    return """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>System Audit</title>
+<style>
+*{box-sizing:border-box}body{margin:24px auto;padding:0 16px;max-width:1050px;background:#10131a;color:#f3f4f6;font:15px system-ui,-apple-system,sans-serif}a{color:#9bb4ff}section{background:#1c2230;border-radius:13px;padding:18px;margin:14px 0}.muted{color:#aab4c5}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}.metric{background:#121722;padding:13px;border-radius:9px}.metric strong{display:block;font-size:1.4rem;margin-top:5px}.check{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:13px 4px;border-bottom:1px solid #3b4558}.check:last-child{border:0}.state{font-weight:800;min-width:88px;text-align:right}.PASS{color:#70d6a5}.WARNING{color:#ffd27a}.FAIL{color:#ff8585}button{background:#8da8ff;color:#10131a;border:0;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer}
+</style></head><body><h1>System Audit</h1><p class="muted">Production readiness checks · read-only diagnostics · Telegram test uses getMe only and sends no messages.</p>
+<p><a href="/">← Main dashboard</a> · <a href="/api/system/audit">JSON API</a> · <a href="/api/system/audit/export">Export audit_report.json ↓</a> · <button onclick="load()">Run audit again</button></p>
+<section><h2>Overall readiness</h2><div class="grid" id="summary"><div class="metric">Running audit…</div></div><p class="muted" id="generated"></p></section>
+<section><h2>Subsystem checks</h2><div id="checks">Running audit…</div></section><p id="status" class="muted">The audit runs at application startup and whenever you request a fresh audit.</p>
+<script>
+const el=id=>document.getElementById(id),esc=v=>String(v??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function load(){el('status').textContent='Running production checks…';try{const r=await fetch('/api/system/audit',{cache:'no-store'}),d=await r.json();if(!r.ok)throw new Error(d.detail||'Audit failed');
+el('summary').innerHTML='<div class="metric">Overall status<strong class="'+esc(d.overall_status)+'">'+esc(d.overall_status)+'</strong></div><div class="metric">Passed<strong>'+d.passed_checks+'</strong></div><div class="metric">Failed<strong>'+d.failed_checks+'</strong></div><div class="metric">Warnings<strong>'+d.warnings+'</strong></div><div class="metric">Uptime<strong>'+d.uptime+'s</strong></div><div class="metric">Audit version<strong>'+esc(d.version)+'</strong></div>';
+el('checks').innerHTML=(d.checks||[]).map(x=>'<div class="check"><div><strong>'+esc(x.name)+'</strong><div class="muted">'+esc(x.message)+'</div></div><div class="state '+esc(x.status)+'">'+esc(x.status)+'</div></div>').join('');
+el('generated').textContent='Generated '+d.generated_at+' · Duration '+d.duration_ms+' ms · '+(d.export_path?'Saved: '+d.export_path:'Report file not persisted');
+el('status').textContent='Audit completed. '+d.checks.length+' subsystem checks evaluated.';
+}catch(e){el('status').textContent='Audit error: '+e.message;}}
+load();
+</script></body></html>"""
 
 
 @app.get("/api/health")
