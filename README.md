@@ -88,6 +88,17 @@ The adaptive pair filter reads completed outcomes from `signal_history.py` and c
 
 
 
+
+## Resilience and recovery suite
+
+- `GET /api/resilience` runs five isolated fault-injection scenarios: WebSocket disconnect, Telegram timeout, database locked, provider unavailable, and invalid candle data.
+- Each scenario uses an in-memory test operation with bounded retries. It does not disconnect a real browser WebSocket, send Telegram messages, lock the production database, contact a market-data provider, or insert synthetic market candles into signal history.
+- The response includes per-scenario recovery status, attempts, recovery success rate, cumulative `recovery_attempts`, `successful_recoveries`, and `unrecoverable_failures`, plus per-run counters.
+- `GET /api/resilience/report` runs the suite and downloads `resilience_report.json`. The report is also written to `RESILIENCE_REPORT_PATH`, default `/tmp/resilience_report.json`.
+- The main dashboard's Production System Health card displays Recovery Success Rate and refreshes it every 60 seconds. This dashboard check runs isolated simulations only.
+- Retry attempts are bounded and no retry is performed against real provider/Telegram/DB operations by this diagnostic suite. Production request retry policies remain unchanged for backwards compatibility.
+- Metrics are process-local and reset when the application process restarts. They are diagnostic test counters, not measured real-world service recovery rates.
+
 ## Production readiness suite
 
 - Open `/system-audit` from the main dashboard for PASS/WARNING/FAIL status for database connectivity, market WebSocket client connectivity, Telegram Bot API connectivity, strategy registry, pair ranking service, health monitor, backtester, and walk-forward validator.
