@@ -21,6 +21,8 @@ _ADDITIVE_COLUMNS = {
     "ema_9": "REAL",
     "ema_21": "REAL",
     "rsi_14": "REAL",
+    "strategy_name": "TEXT",
+    "strategy_version": "TEXT",
 }
 
 
@@ -104,8 +106,8 @@ def record_signal(
             """INSERT OR IGNORE INTO signal_history
                (symbol,timeframe_seconds,signal_time,signal,entry_price,reason,
                 rsi_14,macd_histogram,signal_score,signal_grade,ema_9,ema_21,
-                outcome,created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'PENDING',?)""",
+                strategy_name,strategy_version,outcome,created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'PENDING',?)""",
             (
                 symbol,
                 timeframe_seconds,
@@ -119,6 +121,8 @@ def record_signal(
                 analysis.get("signal_grade"),
                 analysis.get("ema_9"),
                 analysis.get("ema_21"),
+                str(analysis.get("strategy_name", "SCORE_ENGINE_V2")),
+                str(analysis.get("strategy_version", "2.0.0")),
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
@@ -353,6 +357,34 @@ def get_signal_score_statistics() -> dict[str, Any]:
     }
 
 
+
+def get_strategy_statistics() -> dict[str, dict[str, Any]]:
+    """Return signal counts and completed WIN/LOSS performance per strategy."""
+    init_history()
+    with _connection() as conn:
+        rows = conn.execute(
+            """SELECT COALESCE(strategy_name, 'LEGACY') AS strategy_name,
+                      COALESCE(strategy_version, 'legacy') AS strategy_version,
+                      COUNT(*) AS signals,
+                      SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) AS wins,
+                      SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) AS losses
+               FROM signal_history
+               GROUP BY strategy_name, strategy_version"""
+        ).fetchall()
+    result: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        wins, losses = int(row["wins"] or 0), int(row["losses"] or 0)
+        scored = wins + losses
+        key = row["strategy_name"]
+        result[key] = {
+            "strategy_name": key, "strategy_version": row["strategy_version"],
+            "signals": int(row["signals"] or 0), "wins": wins, "losses": losses,
+            "win_rate": round(wins / scored * 100, 2) if scored else None,
+            "scored_signals": scored,
+        }
+    return result
+
+
 def history_summary() -> dict[str, Any]:
     """Return legacy totals plus additive grade/asset and score statistics."""
     init_history()
@@ -389,6 +421,7 @@ def history_summary() -> dict[str, Any]:
     grade_statistics = get_signal_grade_statistics()
     asset_statistics = get_asset_statistics()
     score_statistics = get_signal_score_statistics()
+    strategy_statistics = get_strategy_statistics()
     return {
         "total": sum(by_outcome.values()),
         "wins": wins,
@@ -413,6 +446,7 @@ def history_summary() -> dict[str, Any]:
             }
             for asset, stats in asset_statistics.items()
         },
+        "win_rate_by_strategy": strategy_statistics,
         "average_score_winning_signals": score_statistics["average_winning_score"],
         "average_score_losing_signals": score_statistics["average_losing_score"],
         "average_signal_score": score_statistics["average_signal_score"],
