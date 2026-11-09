@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from backtester import run_backtest
 from data_collector import MarketDataError, connection_status, data_source_label, get_assets, get_candles
 from runtime import bot_status, get_snapshot, get_watchlist, refresh_snapshot, scheduled_refresh_loop, set_bot_enabled
 from signal_history import (
@@ -294,6 +295,53 @@ def analysis(
         raise HTTPException(status_code=502, detail=str(exc)) from None
 
 
+_BACKTEST_TIMEFRAMES = {"1m":60,"5m":300,"15m":900,"30m":1800,"45m":2700,"1h":3600,"2h":7200,"4h":14400,"8h":28800,"1d":86400,"1w":604800,"1mo":2592000}
+
+
+@app.get("/api/backtest")
+def backtest_api(
+    symbol: str = Query("EUR/USD", min_length=3, max_length=40),
+    timeframe: str = Query("1m", min_length=1, max_length=12),
+    expiry: int = Query(1, ge=1, le=3),
+    candle_count: int = Query(500, ge=34, le=5000),
+):
+    """Run an on-demand historical simulation using the existing strategy."""
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        raise HTTPException(status_code=404, detail="Backtesting is disabled for A11KSA candle-only mode.")
+    try:
+        key = timeframe.strip().lower()
+        seconds = int(key) if key.isdigit() else _BACKTEST_TIMEFRAMES.get(key)
+        if seconds is None:
+            raise ValueError("Unsupported timeframe. Use 1m, 5m, 15m, 30m, 45m, 1h, 2h, 4h, 8h, 1d, 1w, or 1mo.")
+        _validate_timeframe(seconds)
+        candles_result = get_candles(symbol, seconds, candle_count)
+        result = run_backtest(candles_result, symbol=symbol, expiry=expiry)
+        return {
+            **result, "timeframe": key, "timeframe_seconds": seconds,
+            "source": data_source_label(),
+            "market_type": candles_result[-1].get("market_type", "provider-specific market") if candles_result else "provider-specific market",
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except MarketDataError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from None
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)[:300]) from None
+
+
+@app.get("/backtest", response_class=HTMLResponse)
+def backtesting_dashboard():
+    if os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() == "a11ksa":
+        return HTMLResponse("<h2>Backtesting is unavailable</h2><p>A11KSA is configured for read-only candle display only.</p>", status_code=404)
+    return """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Historical Backtesting</title><style>
+*{box-sizing:border-box}body{font:15px system-ui;background:#10131a;color:#f3f4f6;margin:24px auto;padding:0 14px;max-width:1000px}section{background:#1c2230;padding:18px;border-radius:12px;margin:14px 0}.muted,small{color:#aab4c5}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}.metric{background:#121722;padding:13px;border-radius:9px}.metric strong{display:block;font-size:1.15rem;margin-top:5px;overflow-wrap:anywhere}input,select,button{padding:10px;border-radius:8px;border:1px solid #46516a;background:#121722;color:#f3f4f6;margin:4px}button{background:#8da8ff;color:#10131a;font-weight:700;cursor:pointer}button:disabled{opacity:.55}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:9px;border-bottom:1px solid #39445a}.tablewrap{overflow-x:auto}
+</style></head><body><h1>Backtesting Results</h1><p class="muted">Historical simulation of the existing CALL / PUT / WAIT strategy. No trades are placed.</p><section><h2>Backtest settings</h2><label>Symbol <input id="symbol" value="EUR/USD" maxlength="40"></label><label>Timeframe <select id="timeframe"><option value="1m">1 minute</option><option value="5m">5 minutes</option><option value="15m">15 minutes</option><option value="30m">30 minutes</option><option value="1h">1 hour</option><option value="4h">4 hours</option></select></label><label>Expiry <select id="expiry"><option value="1">1 candle</option><option value="2">2 candles</option><option value="3">3 candles</option></select></label><label>Candles <input id="candleCount" type="number" min="34" max="5000" value="500"></label><button id="run">Run backtest</button><p id="status" class="muted">Choose settings and run a historical test.</p></section><section><h2>Results</h2><div class="grid"><div class="metric">Win Rate<strong id="winRate">—</strong></div><div class="metric">Signal Count<strong id="signalCount">—</strong></div><div class="metric">Best Pair<strong id="bestPair">—</strong></div><div class="metric">Best Expiry<strong id="bestExpiry">—</strong></div><div class="metric">Strategy Version<strong id="strategyVersion">—</strong></div><div class="metric">Wins / Losses<strong id="winsLosses">—</strong></div><div class="metric">Profit Factor<strong id="profitFactor">—</strong></div><div class="metric">WAIT Signals<strong id="waitSignals">—</strong></div></div><p id="methodology" class="muted"></p></section><section><h2>Expiry comparison</h2><div class="tablewrap"><table><thead><tr><th>Expiry</th><th>Signals</th><th>Wins</th><th>Losses</th><th>Win rate</th><th>Profit factor</th></tr></thead><tbody id="expiryRows"><tr><td colspan="6">No backtest has been run.</td></tr></tbody></table></div></section><p><a href="/" style="color:#9bb4ff">Return to main dashboard</a></p><script>
+const $=id=>document.getElementById(id),pct=v=>v===null||v===undefined?'N/A':Number(v).toFixed(2)+'%',num=v=>v===null||v===undefined?'N/A':Number(v).toFixed(4);
+async function run(){const b=$('run');b.disabled=true;b.textContent='Running…';$('status').textContent='Fetching historical candles and evaluating signals…';try{const q=new URLSearchParams({symbol:$('symbol').value.trim(),timeframe:$('timeframe').value,expiry:$('expiry').value,candle_count:$('candleCount').value});const r=await fetch('/api/backtest?'+q.toString(),{cache:'no-store'}),d=await r.json();if(!r.ok)throw new Error(d.detail||'Backtest failed');$('winRate').textContent=pct(d.win_rate);$('signalCount').textContent=d.total_signals??0;$('bestPair').textContent=d.best_asset||d.symbol||'N/A';$('bestExpiry').textContent=d.best_expiry===null?'N/A':d.best_expiry+' candle(s)';$('strategyVersion').textContent=d.strategy_version||'N/A';$('winsLosses').textContent=(d.wins??0)+' / '+(d.losses??0);$('profitFactor').textContent=num(d.profit_factor);$('waitSignals').textContent=d.wait_signals??0;$('methodology').textContent=d.methodology||'';$('expiryRows').innerHTML=(d.expiry_comparison||[]).map(x=>'<tr><td>'+x.expiry+' candle(s)</td><td>'+x.total_signals+'</td><td>'+x.wins+'</td><td>'+x.losses+'</td><td>'+pct(x.win_rate)+'</td><td>'+num(x.profit_factor)+'</td></tr>').join('')||'<tr><td colspan="6">No results.</td></tr>';$('status').textContent='Completed · '+d.candles_used+' candles · '+(d.source||'provider')+' · '+(d.market_type||'market type not specified');}catch(e){$('status').textContent='Backtest error: '+e.message;}finally{b.disabled=false;b.textContent='Run backtest';}}
+$('run').addEventListener('click',run);
+</script></body></html>"""
+
+
 @app.get("/api/watchlist")
 def watchlist():
     """Configured multi-symbol watchlist and each symbol's cached status."""
@@ -351,7 +399,7 @@ def dashboard():
     return """<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Quotex Demo Live Data & Signal Bot</title><script src='https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js'></script><style>
 *{box-sizing:border-box}body{font-family:system-ui,-apple-system,sans-serif;max-width:1180px;margin:28px auto;padding:0 16px;background:#10131a;color:#f3f4f6}section{background:#1c2230;border-radius:14px;padding:20px;margin:14px 0;overflow:hidden}small,.muted{color:#b6c0d1}.warn{color:#ffcc80}.signal{font-size:1.5rem;font-weight:750}button{background:#7c9cff;color:#10131a;border:0;border-radius:8px;padding:10px 14px;font-weight:700;cursor:pointer}button:disabled{opacity:.55}table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:.88rem}th,td{text-align:right;padding:8px;border-bottom:1px solid #3a4355;white-space:nowrap}th:first-child,td:first-child{text-align:left}.tablewrap{overflow-x:auto}.chart{height:340px;width:100%}.macdchart{height:170px;width:100%}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}.metric{background:#121722;border-radius:10px;padding:12px}.metric strong{display:block;font-size:1.05rem;margin-top:4px}.pill{display:inline-block;background:#303b52;padding:4px 8px;border-radius:999px;font-size:.8rem}.history-good{color:#73d6ae}.history-bad{color:#ff8c8c}@media(max-width:600px){.chart{height:290px}section{padding:14px}}
 </style></head><body>
-<h1>Quotex Live Data &amp; Signal Bot</h1><p>1-minute candles · Chart time: IST · 1m/2m expiry hint · Read-only signals · No automatic trades</p>
+<h1>Quotex Live Data &amp; Signal Bot</h1><p><a href="/backtest" style="color:#9bb4ff">Open Historical Backtesting →</a></p><p>1-minute candles · Chart time: IST · 1m/2m expiry hint · Read-only signals · No automatic trades</p>
 <section><h2>Data provider</h2><p id='providerInfo'>ChipaDevTeam QuotexAPI · Quotex account selected in Render</p><small>Data is read from the selected Quotex account session through the unofficial ChipaDevTeam QuotexAPI library. Only verified OHLC events are analyzed; no orders are placed.</small></section>
 <section><h2>Connection &amp; schedule</h2><p id='botStatus' class='pill'>Bot status: checking…</p><p><button id='botToggle'>Turn bot ON</button></p><p class='muted'>OFF pauses automatic provider refreshes. Manual refresh still uses an API request.</p><p id='status'>Checking API key…</p><p id='updated' class='muted'>Waiting for first scheduled refresh…</p><p id='telegram' class='muted'>Telegram setup status will appear after refresh.</p><label for='assetSelect'>Watchlist pair</label> <select id='assetSelect' style='margin:8px;background:#121722;color:#f3f4f6;border:1px solid #46516a;border-radius:8px;padding:8px'><option>Loading watchlist…</option></select><p id='watchlistInfo' class='muted'>One symbol is scanned per interval to protect the free API quota.</p><span class='pill'>Scheduled refresh: minimum 5 minutes</span></section>
 <section><h2>Signal summary</h2><p id='signal' class='signal'>WAIT · Waiting for data</p><p id='reason' class='muted'>Waiting for first scheduled refresh.</p><p id='expiry' class='pill'>Expiry suggestion: waiting for data</p><p id='candleWindow' class='muted'>Candle status: waiting for data</p><div class='grid'><div class='metric'>RSI (14)<strong id='rsi'>—</strong></div><div class='metric'>MACD histogram<strong id='macd'>—</strong></div><div class='metric'>Bollinger upper<strong id='bbupper'>—</strong></div><div class='metric'>Bollinger middle<strong id='bbmiddle'>—</strong></div><div class='metric'>Bollinger lower<strong id='bblower'>—</strong></div><div class='metric'>Support / resistance (20)<strong id='sr'>—</strong></div></div><p style='margin-top:14px'><button id='refresh'>Refresh selected pair (uses 1 request)</button></p><p class='warn'>CALL / PUT / WAIT are heuristic labels, not validated predictions, financial advice, or guarantees.</p></section>
