@@ -95,7 +95,7 @@ def get_validation_payload(now: datetime | None = None) -> dict[str, Any]:
     for grade in ("STRONG", "MODERATE", "WEAK"):
         row = grade_map.get(grade)
         result = _stats([row] if row else [])
-        result["total_signals"] = int((row["wins"] or 0) + (row["losses"] or 0)) if row else 0
+        result["total_signals"] = int(row["total_signals"] or 0) if row else 0
         grade_metrics[grade.lower()] = result
 
     total = int(overall["total"] or 0)
