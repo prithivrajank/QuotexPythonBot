@@ -128,6 +128,23 @@ def resilience_api():
         raise HTTPException(status_code=500, detail="Resilience suite could not be completed.") from None
 
 
+
+@app.get("/api/resilience/report")
+def resilience_report_export():
+    """Download a fresh isolated resilience test report as JSON."""
+    try:
+        report = run_resilience_suite()
+        body = json.dumps(report, indent=2, sort_keys=True)
+        return StreamingResponse(
+            iter([body]),
+            media_type="application/json",
+            headers={"Content-Disposition": 'attachment; filename="resilience_report.json"'},
+        )
+    except Exception:
+        logging.getLogger("resilience").exception("Resilience report export failed.")
+        raise HTTPException(status_code=500, detail="Resilience report could not be generated.") from None
+
+
 @app.get("/api/system/audit")
 def system_audit_api():
     """Run all production-readiness checks and return the latest audit report."""
