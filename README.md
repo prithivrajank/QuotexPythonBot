@@ -63,6 +63,17 @@ The adaptive pair filter reads completed outcomes from `signal_history.py` and c
 - Profit factor is calculated from summed directional percentage price moves, not binary-options payout, spread, fees, slippage, or executable fills. Results are research estimates, not a prediction or guarantee.
 - Backtesting is unavailable when `MARKET_DATA_PROVIDER=a11ksa`, because that provider mode is intentionally limited to candle display only.
 
+
+## Walk-forward validation
+
+- Run the dashboard widget on the main page or call `GET /api/walkforward?symbol=EUR%2FUSD&timeframe=1m&expiry=1&candle_count=500`.
+- Parameters match the backtest endpoint: provider-exact `symbol`, supported `timeframe`, `expiry` of 1, 2, or 3 candles, and `candle_count` from 110 to 5000.
+- Candles are sorted chronologically and split into the first 70% (training) and final 30% (validation). The existing `backtester.run_backtest()` is run independently on each segment, which in turn calls the existing `strategies.analyze_candles()` using prefix-only history for each decision candle.
+- Response fields include `training_win_rate`, `validation_win_rate`, `overfit_score` (absolute difference in percentage points), and `strategy_health` / `status`. A difference of 5 percentage points or less is `HEALTHY`; above 5 through 15 is `WARNING`; above 15 is `OVERFIT`. If either segment has no scored outcomes, the result is `INSUFFICIENT_DATA` and the score is null.
+- Each 70/30 segment must contain at least 33 candles to support the existing 1/2/3-candle expiry comparison, so at least 110 total chronological candles are required. WAIT and flat outcomes are excluded from win-rate denominators.
+- This is a historical robustness check, not a guarantee of future performance. It uses directional close-to-close movement rather than binary-options payouts, and the overfit score is a percentage-point gap, not a probability.
+- Walk-forward validation is unavailable in `MARKET_DATA_PROVIDER=a11ksa` candle-only mode.
+
 ## Signal limitations
 
 CALL/PUT/WAIT labels, indicator summaries, and expiry suggestions are heuristic analysis, not validated probabilities, financial advice, or guaranteed predictions. OTC quotes are a broker-specific synthetic series and may differ from standard forex prices. Test against the source chart before relying on any result.
