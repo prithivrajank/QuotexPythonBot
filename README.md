@@ -97,6 +97,16 @@ The adaptive pair filter reads completed outcomes from `signal_history.py` and c
 - Signal history and health snapshots share the configured `DATABASE_PATH`. Configure persistent storage if reports must retain history across Render restarts. The report covers the last seven rolling days in UTC.
 - A11KSA candle-only mode continues to disable signal-based weekly reporting.
 
+
+## Automatic strategy promotion and demotion
+
+- `strategy_manager.py` automatically ranks registered strategies using the operator-provided baseline rates: `EMA_RSI_V1` 58%, `SCORE_ENGINE_V2` 64%, and `BREAKOUT_V3` 71%.
+- With these baseline rates, `BREAKOUT_V3` is automatically PROMOTED and selected for live analysis; `EMA_RSI_V1` is DEMOTED; `SCORE_ENGINE_V2` is RETAINED.
+- Once a strategy has at least `STRATEGY_PROMOTION_MIN_SIGNALS` completed WIN/LOSS outcomes (default 20), its measured history win rate replaces its baseline for ranking. Pending, skipped and flat outcomes do not count.
+- `GET /api/strategy-manager` returns active, promoted and demoted strategy, each strategy's rate source and management status. `GET /api/strategies` includes active, promotion rate, and management status fields.
+- Automatic selection is enabled by default. Set `AUTO_STRATEGY_SELECTION=false` to disable it and use `STRATEGY_NAME` as the manual strategy override. A11KSA candle-only mode does not run strategy management.
+- Promotion changes which analysis strategy is selected; it does not place trades, change broker settings, or guarantee future performance. Validate historical results and monitor sample sizes before relying on rankings.
+
 ## Strategy version manager
 
 - `strategy_registry.py` registers `EMA_RSI_V1` (1.0.0), `SCORE_ENGINE_V2` (2.0.0), and `BREAKOUT_V3` (3.0.0). Each analyzer returns `strategy_name` and `strategy_version` with the common CALL/PUT/WAIT analysis fields.
