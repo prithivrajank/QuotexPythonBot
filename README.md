@@ -86,6 +86,16 @@ The adaptive pair filter reads completed outcomes from `signal_history.py` and c
 
 
 
+
+## Signal validation dashboard
+
+- Open `/validation` from the main dashboard to review the latest 500 signal-history records.
+- `GET /api/validation-dashboard` returns the latest-500 summary, WIN/LOSS totals and win rate, STRONG/MODERATE/WEAK grade win rates, top 10 pairs, strategy rankings, recent 24-hour/7-day/30-day performance, and the last 500 signal rows.
+- `GET /api/validation-dashboard/export.csv` downloads those same latest 500 signal rows as CSV.
+- The dashboard also reads `/api/health` for process uptime and provider, Telegram, and database component status.
+- Overall and grade win rates use completed WIN/LOSS outcomes only; pending, skipped, and flat rows remain included in total signal counts but not win-rate denominators. Pair and strategy rankings use the latest-500 sample. Recent windows use all stored records in their respective UTC time ranges.
+- The existing `/api/history`, `/api/health`, weekly report, strategy, and pair-performance APIs are unchanged. Validation endpoints are unavailable in A11KSA candle-only mode, which continues to redirect to the read-only market page.
+
 ## Weekly performance and health report
 
 - `GET /api/weekly-report` generates a rolling seven-day UTC report as JSON.
