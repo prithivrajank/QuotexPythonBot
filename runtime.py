@@ -10,6 +10,7 @@ from typing import Any
 
 from data_collector import MarketDataError, data_source_label, get_candles
 from signal_history import record_signal, score_due_outcomes
+from pair_performance import filter_analysis, get_pair_status
 from strategies import analyze_candles, build_chart_data
 from telegram_market_data import notify_new_candle, telegram_configured
 
@@ -152,7 +153,8 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
             with _lock:
                 _snapshots[selected] = snapshot
             return dict(snapshot)
-        analysis = analyze_candles(candles)
+        analysis = filter_analysis(selected, analyze_candles(candles))
+        pair_status = get_pair_status(selected)
         latest = candles[-1]
         record = record_signal(selected, TIMEFRAME_SECONDS, latest, analysis)
         score_due_outcomes(selected, TIMEFRAME_SECONDS, latest, horizon_candles=5)
@@ -174,6 +176,7 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
             "latest_candle": latest,
             "recent_candles": candles[-10:],
             "analysis": analysis,
+            "pair_status": pair_status,
             "chart": build_chart_data(candles),
             "signal_history_inserted": record["inserted"],
             "message": "Scheduled refresh successful.",
@@ -185,7 +188,11 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
         with _lock:
             _snapshots[selected] = snapshot
         # Telegram receives market-data candle updates only; never send strategy outputs.
-        notification = notify_new_candle(snapshot)
+        notification = (
+            {"sent": False, "reason": "Pair is DISABLED; Telegram alerts suppressed."}
+            if pair_status == "DISABLED"
+            else notify_new_candle(snapshot)
+        )
         snapshot["telegram_notification"] = notification
         with _lock:
             _snapshots[selected] = snapshot
