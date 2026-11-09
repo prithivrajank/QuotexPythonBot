@@ -140,7 +140,7 @@ def generate_weekly_report(now: datetime | None = None) -> dict[str, Any]:
 
     win_trend = []
     for offset in range(7):
-        day = (start.date() + timedelta(days=offset)).isoformat()
+        day = (end.date() - timedelta(days=6 - offset)).isoformat()
         bucket = daily.get(day, {"signals": 0, "wins": 0, "losses": 0})
         win_trend.append({"date": day, **bucket, "win_rate": _rate(bucket["wins"], bucket["losses"])})
 
