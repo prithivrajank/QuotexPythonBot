@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
+import platform
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ def _memory_usage() -> dict[str, Any]:
 
         peak = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
         # Linux reports KiB; macOS reports bytes.
-        peak_mb = peak / (1024.0 if peak > 10_000 else 1024.0 * 1024.0)
+        peak_mb = peak / (1024.0 * 1024.0 if platform.system() == "Darwin" else 1024.0)
         return {"peak_rss_mb": round(peak_mb, 2), "available": True}
     except (ImportError, OSError, ValueError):
         logger.debug("Process RSS metrics are unavailable on this platform.")
