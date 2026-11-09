@@ -13,7 +13,7 @@ from signal_history import record_signal, score_due_outcomes
 from pair_performance import filter_analysis, get_pair_status
 from strategies import analyze_candles, build_chart_data
 from telegram_market_data import notify_new_candle, telegram_configured
-from health_monitor import record_candle, record_exception, record_signal, record_telegram_result, set_component
+from health_monitor import record_candle, record_exception, record_signal as record_strategy_signal, record_telegram_result, set_component
 
 DEFAULT_SYMBOLS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD",
@@ -157,7 +157,7 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
             return dict(snapshot)
         try:
             analysis = filter_analysis(selected, analyze_candles(candles))
-            record_signal(candles[-1].get("time"), analysis.get("signal"))
+            record_strategy_signal(candles[-1].get("time"), analysis.get("signal"))
         except Exception:
             record_exception("strategy")
             set_component("strategy", "down", "Strategy analysis failed.")
