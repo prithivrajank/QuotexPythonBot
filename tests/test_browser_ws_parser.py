@@ -65,7 +65,7 @@ def test_historical_binary_attachment_parses_explicit_ohlc():
         "asset": "USDDZD_otc",
         "period": 60,
         "candles": [
-            [1793797440, 255.885, 255.9, 255.912, 255.905, 76, 1793797499.921]
+            [1793797440, 255.885, 255.905, 255.912, 255.885, 76, 1793797499.921]
         ],
     }
     records = parse_history_attachment(
@@ -90,7 +90,7 @@ def test_history_binary_header_and_attachment_are_paired():
             "asset": "USDDZD_otc",
             "period": 60,
             "candles": [
-                [1793797440, 255.885, 255.9, 255.912, 255.905, 76, 1793797499.921]
+                [1793797440, 255.885, 255.905, 255.912, 255.885, 76, 1793797499.921]
             ],
         }).encode("utf-8")
     )
