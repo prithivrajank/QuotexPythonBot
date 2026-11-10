@@ -26,7 +26,7 @@ class MarketCapture:
     @staticmethod
     def _append(path: Path, record: dict) -> None:
         with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, separators=(",", ":")) + "\\n")
+            handle.write(json.dumps(record, separators=(",", ":")) + "\n")
 
     def on_frame(self, payload: str | bytes) -> None:
         # Never print or persist raw frames; they may contain private account data.
@@ -120,4 +120,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\\nCapture stopped.")
+        print("\nCapture stopped.")
