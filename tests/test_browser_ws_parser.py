@@ -13,7 +13,7 @@ from browser_ws_parser import (
 def test_quote_binary_attachment_is_paired_with_event_header():
     parser = QuotexMarketFrameParser("USDDZD_otc")
     assert parser.feed('451-["quotes/stream",{"_placeholder":true,"num":0}]') == []
-    records = parser.feed(b'\\x04[["USDDZD_otc",1793803080.235,255.989,0]]')
+    records = parser.feed(b'\x04[["USDDZD_otc",1793803080.235,255.989,0]]')
     assert records == [{
         "kind": "tick",
         "asset": "USDDZD_otc",
@@ -69,7 +69,7 @@ def test_historical_binary_attachment_parses_explicit_ohlc():
         ],
     }
     records = parse_history_attachment(
-        b'\\x04' + json.dumps(body).encode("utf-8"),
+        b'\x04' + json.dumps(body).encode("utf-8"),
         "USDDZD_otc",
     )
     assert len(records) == 1
@@ -86,7 +86,7 @@ def test_history_binary_header_and_attachment_are_paired():
         '451-["history/list/v2",{"_placeholder":true,"num":0}]'
     ) == []
     records = parser.feed(
-        b'\\x04' + json.dumps({
+        b'\x04' + json.dumps({
             "asset": "USDDZD_otc",
             "period": 60,
             "candles": [
@@ -105,20 +105,20 @@ def test_history_rejects_wrong_asset_and_timeframe():
         "candles": [[1793797440, 1.0, 0.9, 1.1, 1.0, 10, 1793797499.0]],
     }
     assert parse_history_attachment(
-        b'\\x04' + json.dumps(body).encode(), "EURUSD_otc"
+        b'\x04' + json.dumps(body).encode(), "EURUSD_otc"
     ) == []
     body["asset"] = "EURUSD_otc"
     body["period"] = 300
     assert parse_history_attachment(
-        b'\\x04' + json.dumps(body).encode(), "EURUSD_otc"
+        b'\x04' + json.dumps(body).encode(), "EURUSD_otc"
     ) == []
 
 
 def test_unknown_or_malformed_binary_events_are_ignored():
     parser = QuotexMarketFrameParser("EURUSD_otc")
     assert parser.feed('451-["balance",{"_placeholder":true,"num":0}]') == []
-    assert parser.feed(b'\\x04{"private":"not market data"}') == []
-    assert parse_quote_attachment(b"\\x04not-json", "EURUSD_otc") == []
+    assert parser.feed(b'\x04{"private":"not market data"}') == []
+    assert parse_quote_attachment(b"\x04not-json", "EURUSD_otc") == []
 
 
 def test_invalid_attachment_count_is_rejected():
@@ -136,8 +136,8 @@ def test_multiframe_attachment_is_waited_for_until_complete():
         '"second":{"_placeholder":true,"num":1}}]'
     )
     assert parser.feed(header) == []
-    assert parser.feed(b'\\x04[["EURUSD_otc",120,1.1,0]]') == []
-    result = parser.feed(b'\\x04[["EURUSD_otc",121,1.2,0]]')
+    assert parser.feed(b'\x04[["EURUSD_otc",120,1.1,0]]') == []
+    result = parser.feed(b'\x04[["EURUSD_otc",121,1.2,0]]')
     assert len(result) == 2
 
 
