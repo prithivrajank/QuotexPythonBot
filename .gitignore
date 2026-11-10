@@ -20,3 +20,9 @@ quotex_browser_profile/
 browser_ticks_*.jsonl
 browser_candles_*.jsonl
 browser_history_*.jsonl
+
+# Local browser authentication profile and market-data captures
+quotex_browser_profile/
+browser_ticks_*.jsonl
+browser_candles_*.jsonl
+browser_history_*.jsonl
