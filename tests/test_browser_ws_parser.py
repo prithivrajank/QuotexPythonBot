@@ -76,7 +76,7 @@ def test_historical_binary_attachment_parses_explicit_ohlc():
     assert records[0]["time"] == 1793797440
     assert records[0]["open"] == 255.885
     assert records[0]["high"] == 255.912
-    assert records[0]["low"] == 255.9
+    assert records[0]["low"] == 255.885
     assert records[0]["close"] == 255.905
 
 
