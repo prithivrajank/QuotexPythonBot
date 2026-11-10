@@ -124,7 +124,7 @@ def test_unknown_or_malformed_binary_events_are_ignored():
 def test_invalid_attachment_count_is_rejected():
     parser = QuotexMarketFrameParser("EURUSD_otc")
     assert parser.feed(
-        '499-["quotes/stream",{"_placeholder":true,"num":0}]'
+        '459-["quotes/stream",{"_placeholder":true,"num":0}]'
     ) == []
 
 
