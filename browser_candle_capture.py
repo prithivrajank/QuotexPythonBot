@@ -1,81 +1,123 @@
-"""Local read-only capture of explicit OHLC records from a manually logged-in Quotex browser."""
+"""Local, read-only capture of observed Quotex Demo market WebSocket frames."""
 from __future__ import annotations
-import asyncio, json, re, time
+
+import asyncio
+import json
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
-from playwright.async_api import async_playwright
+from urllib.parse import urlsplit
 
-OUTPUT = Path("browser_candles.jsonl")
-SENSITIVE = re.compile(r"(ssid|session|token|cookie|authorization|password|secret|auth)", re.I)
 
-def decode_packet(frame: str):
-    text = frame.strip()
-    if text.startswith("42"):
-        text = text[2:]
-    try:
-        return json.loads(text)
-    except (json.JSONDecodeError, TypeError):
-        return None
+class MarketCapture:
+    def __init__(self, asset: str):
+        # Lazy import keeps parser tests independent from Playwright.
+        from browser_ws_parser import MinuteCandleAggregator, QuotexMarketFrameParser
 
-def find_ohlc(value: Any):
-    if isinstance(value, dict):
-        for keys in (("open","high","low","close"), ("o","h","l","c")):
-            try:
-                o,h,lo,c = (float(value[k]) for k in keys)
-                raw_ts = next(value[k] for k in ("time","timestamp","from","at","epoch") if k in value)
-                ts = int(float(raw_ts))
-                if ts > 10_000_000_000: ts //= 1000
-                if ts > 0 and all(map(lambda x: x == x and abs(x) != float("inf"), (o,h,lo,c))) and h >= max(o,lo,c) and lo <= min(o,h,c):
-                    symbol = next((str(value[k]) for k in ("asset","symbol","pair","instrument") if k in value), "UNKNOWN")
-                    yield {"time":ts,"open":o,"high":h,"low":lo,"close":c,"symbol":symbol}
-                    break
-            except (KeyError,TypeError,ValueError,StopIteration,OverflowError):
-                pass
-        for child in value.values():
-            yield from find_ohlc(child)
-    elif isinstance(value, list):
-        for child in value:
-            yield from find_ohlc(child)
+        self.parser = QuotexMarketFrameParser(asset)
+        self.aggregator = MinuteCandleAggregator()
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        self.ticks_path = Path(f"browser_ticks_{stamp}.jsonl")
+        self.candles_path = Path(f"browser_candles_{stamp}.jsonl")
+        self.history_path = Path(f"browser_history_{stamp}.jsonl")
+        self.tick_count = 0
+        self.candle_count = 0
+        self.history_count = 0
 
-def handler(url: str):
-    seen = set()
-    def on_frame(payload):
-        if isinstance(payload, bytes): payload = payload.decode("utf-8", errors="ignore")
-        if not isinstance(payload, str): return
-        data = decode_packet(payload)
-        if data is None: return
-        event = data[0] if isinstance(data,list) and data and isinstance(data[0],str) else "non-event-packet"
-        rows = list(find_ohlc(data))
-        for row in rows:
-            key = (row["symbol"],row["time"])
-            if key in seen: continue
-            seen.add(key)
-            record = {**row,"captured_at":int(time.time()),"event":event,"source":"manual_Quotex_browser"}
-            with OUTPUT.open("a",encoding="utf-8") as f: f.write(json.dumps(record)+"\n")
-            print("VALID OHLC:",json.dumps(record))
-        if not rows and event != "non-event-packet":
-            kind = type(data[1]).__name__ if isinstance(data,list) and len(data)>1 else type(data).__name__
-            print("WS EVENT:",event,"payload type:",kind)
-    return on_frame
+    @staticmethod
+    def _append(path: Path, record: dict) -> None:
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, separators=(",", ":")) + "\\n")
 
-async def main():
-    print("Opening browser. Sign in manually to Quotex Demo; never share cookies or session data.")
-    print("Open a chart and leave it visible for 2-3 minutes. Ctrl+C stops capture.")
-    async with async_playwright() as p:
-        context = await p.chromium.launch_persistent_context("quotex_browser_profile",headless=False,viewport={"width":1440,"height":900})
+    def on_frame(self, payload: str | bytes) -> None:
+        # Never print or persist raw frames; they may contain private account data.
+        for record in self.parser.feed(payload):
+            captured_at = datetime.now(timezone.utc).isoformat()
+            if record["kind"] == "tick":
+                self._append(self.ticks_path, {
+                    **record,
+                    "captured_at": captured_at,
+                    "source": "manual_quotex_demo_browser",
+                })
+                candle = self.aggregator.add(record)
+                self.tick_count += 1
+                if candle:
+                    self._append(self.candles_path, {
+                        **candle,
+                        "captured_at": captured_at,
+                        "source": "aggregated_quotex_demo_ticks",
+                    })
+                    self.candle_count += 1
+                    print(
+                        "LIVE TICK", record["asset"],
+                        "price=", record["price"],
+                        "timestamp=", record["timestamp"],
+                        "| 1m OHLC",
+                        candle["open"], candle["high"],
+                        candle["low"], candle["close"],
+                        "ticks=", candle["tick_count"],
+                    )
+            elif record["kind"] == "historical_candle":
+                self._append(self.history_path, {
+                    **record,
+                    "captured_at": captured_at,
+                    "source": "manual_quotex_demo_browser",
+                })
+                self.history_count += 1
+                print(
+                    "HISTORICAL OHLC", record["asset"], record["time"],
+                    "O=", record["open"], "H=", record["high"],
+                    "L=", record["low"], "C=", record["close"],
+                )
+
+
+async def main() -> None:
+    from playwright.async_api import async_playwright
+
+    asset = input("Enter exact Demo chart symbol (example EURUSD_otc): ").strip()
+    if not asset:
+        raise SystemExit("A chart symbol is required.")
+    capture = MarketCapture(asset)
+
+    print("Opening a local Chromium window. Sign in manually to Quotex Demo.")
+    print("Select the same symbol entered above and keep its chart visible.")
+    print("Only parsed incoming quote/history market data will be saved.")
+    print("Cookies, credentials, session IDs and raw frames are never saved.")
+    print("Press Ctrl+C in this terminal to stop.")
+
+    async with async_playwright() as playwright:
+        context = await playwright.chromium.launch_persistent_context(
+            "quotex_browser_profile",
+            headless=False,
+            viewport={"width": 1440, "height": 900},
+        )
         page = context.pages[0] if context.pages else await context.new_page()
-        def on_ws(ws):
-            host = re.sub(r"wss?://([^/]+).*",r"\1",ws.url)
-            print("WEBSOCKET:",host)
-            ws.on("framereceived",handler(ws.url))
-        page.on("websocket",on_ws)
-        await page.goto("https://qxbroker.com/en",wait_until="domcontentloaded")
-        print("After login, open EUR/USD OTC or your Demo pair.")
+
+        def on_websocket(websocket) -> None:
+            if urlsplit(websocket.url).hostname != "ws2.quotex.com":
+                return
+            print("Observed the Quotex market WebSocket.")
+            websocket.on("framereceived", capture.on_frame)
+
+        page.on("websocket", on_websocket)
         try:
-            while True: await asyncio.sleep(1)
-        except KeyboardInterrupt:
-            pass
-        await context.close()
+            await page.goto("https://qxbroker.com/en", wait_until="domcontentloaded")
+            print("Complete Demo login yourself, then open", asset, "chart.")
+            while True:
+                await asyncio.sleep(1)
+        finally:
+            await context.close()
+
+    print("Capture summary:")
+    print("Ticks:", capture.tick_count)
+    print("Live 1-minute OHLC updates:", capture.candle_count)
+    print("Historical candles:", capture.history_count)
+    print("Tick file:", capture.ticks_path)
+    print("Live OHLC file:", capture.candles_path)
+    print("History file:", capture.history_path)
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\\nCapture stopped.")
