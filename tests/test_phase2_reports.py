@@ -72,7 +72,7 @@ def test_validation_dashboard_aggregates_outcomes_grades_periods_and_csv(monkeyp
     csv_rows = validation_dashboard.validation_csv_rows(payload)
     assert len(csv_rows) == 4
     assert all("signal_time_iso" in row for row in csv_rows)
-    assert csv_rows[0]["symbol"] == "OLD/PAIR"
+    assert {row["symbol"] for row in csv_rows} == {"OLD/PAIR", "EUR/USD", "GBP/USD"}
 
 
 def test_validation_dashboard_empty_database_returns_zeroed_metrics(monkeypatch, tmp_path):
