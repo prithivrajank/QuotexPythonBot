@@ -9,7 +9,7 @@ from typing import Any, Callable
 
 import pandas as pd
 
-from strategies import analyze_candles
+from strategies import _frame, analyze_candles
 
 STRATEGIES: dict[str, dict[str, Any]] = {
     "EMA_RSI_V1": {
@@ -37,11 +37,12 @@ def get_strategy(name: str | None = None) -> dict[str, Any]:
 
 def _ema_rsi(candles: list[dict]) -> dict[str, Any]:
     result = analyze_candles(candles)
-    frame = pd.DataFrame(candles)
-    if len(frame) < 22 or not {"close", "high", "low", "open"}.issubset(frame.columns):
+    frame = _frame(candles)
+    if len(frame) < 22:
         result.update(signal="WAIT", reason="EMA_RSI_V1 requires at least 22 valid OHLC candles")
+        return result
     else:
-        close = pd.to_numeric(frame["close"], errors="coerce").dropna()
+        close = frame["close"]
         ema9 = close.ewm(span=9, adjust=False).mean().iloc[-1]
         ema21 = close.ewm(span=21, adjust=False).mean().iloc[-1]
         delta = close.diff()
@@ -63,14 +64,8 @@ def _score_engine(candles: list[dict]) -> dict[str, Any]:
 
 def _breakout(candles: list[dict]) -> dict[str, Any]:
     result = analyze_candles(candles)
-    frame = pd.DataFrame(candles)
+    frame = _frame(candles)
     required = {"open", "high", "low", "close"}
-    if len(frame) < 22 or not required.issubset(frame.columns):
-        result.update(signal="WAIT", reason="BREAKOUT_V3 requires at least 22 valid OHLC candles")
-        return result
-    for col in required:
-        frame[col] = pd.to_numeric(frame[col], errors="coerce")
-    frame = frame.dropna(subset=list(required))
     if len(frame) < 22:
         result.update(signal="WAIT", reason="Insufficient valid OHLC candles")
         return result
