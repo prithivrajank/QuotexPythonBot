@@ -44,7 +44,7 @@ def get_validation_payload(now: datetime | None = None) -> dict[str, Any]:
             (VALIDATION_LIMIT,),
         ).fetchone()
         grades = conn.execute(
-            """SELECT signal_grade,
+            """SELECT signal_grade, COUNT(*) AS total_signals,
                       SUM(CASE WHEN outcome='WIN' THEN 1 ELSE 0 END) AS wins,
                       SUM(CASE WHEN outcome='LOSS' THEN 1 ELSE 0 END) AS losses
                FROM (SELECT signal_grade, outcome FROM signal_history
