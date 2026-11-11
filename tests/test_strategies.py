@@ -312,3 +312,38 @@ def test_chart_data_keeps_positive_and_negative_macd_histogram_colors(monkeypatc
     colors = {row["color"] for row in result["macdHistogram"]}
 
     assert colors == {"#26a69a", "#ef5350"}
+
+
+
+def test_analysis_returns_wait_when_an_indicator_is_unavailable(monkeypatch):
+    """A missing final EMA value prevents a CALL/PUT direction decision."""
+    candles = make_candles(30)
+    count = len(candles)
+
+    def series(value):
+        return pd.Series([value] * count, dtype="float64")
+
+    indicator_data = {
+        "ema9": series(float("nan")),
+        "ema21": series(1.0),
+        "rsi14": series(60.0),
+        "macd": series(0.1),
+        "macd_signal": series(0.05),
+        "macd_hist": series(0.05),
+        "atr14": series(0.1),
+        "atr_average": series(0.2),
+        "bb_mid": series(1.0),
+        "bb_upper": series(1.1),
+        "bb_lower": series(0.9),
+    }
+    monkeypatch.setattr(
+        strategies, "_indicators", lambda _df: indicator_data
+    )
+
+    result = analyze_candles(candles)
+
+    assert result["signal"] == "WAIT"
+    assert result["signal_grade"] == "WAIT"
+    assert result["signal_score"] == 0
+    assert result["expiry_recommendation_minutes"] is None
+    assert "EMA trend and RSI do not align" in result["reason"]
