@@ -19,7 +19,7 @@ def clean_adapter_state(monkeypatch):
     monkeypatch.setattr(provider, "_rows", defaultdict(list))
     monkeypatch.setattr(provider, "_ticks", {})
     monkeypatch.setattr(provider, "_seen", set())
-    monkeypatch.setenv("FOREX_SYMBOLS", "EURUSD_otc,GBPUSD_otc,EURUSD")
+    monkeypatch.setenv("FOREX_SYMBOLS", "EURUSD_otc,EURUSD")
     monkeypatch.setenv("QUOTEX_ACCOUNT", "demo")
     monkeypatch.setenv("QUOTEX_IS_DEMO", "true")
 
