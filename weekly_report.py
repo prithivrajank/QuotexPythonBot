@@ -156,7 +156,7 @@ def generate_weekly_report(now: datetime | None = None) -> dict[str, Any]:
         health_by_day.setdefault(day, []).append(int(row["health_score"]))
     health_trend = []
     for offset in range(7):
-        day = (start.date() + timedelta(days=offset)).isoformat()
+        day = (end.date() - timedelta(days=6 - offset)).isoformat()
         values = health_by_day.get(day, [])
         health_trend.append({
             "date": day, "observations": len(values),
