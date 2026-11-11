@@ -175,3 +175,24 @@ def test_twelve_data_rejects_more_candles_than_requested(monkeypatch):
     monkeypatch.setattr(dc, "_get", lambda *a: {"values": [row, dict(row, datetime="2026-11-11T10:01:00+00:00")]})
     with pytest.raises(MarketDataError, match="more candles than requested"):
         dc.get_candles("EUR/USD", 60, 1)
+
+def test_twelve_data_get_returns_valid_payload_with_api_key(monkeypatch):
+    monkeypatch.setenv("TWELVE_DATA_API_KEY", "test-key")
+    calls = []
+    response = Response(payload={"data": [{"symbol": "EUR/USD"}]})
+    monkeypatch.setattr(
+        dc.requests, "get",
+        lambda *a, **k: (calls.append((a, k)) or response),
+    )
+    payload = dc._get("api_usage", {"scope": "test"})
+    assert payload == {"data": [{"symbol": "EUR/USD"}]}
+    assert calls[0][0][0].endswith("/api_usage")
+    assert calls[0][1]["headers"]["Authorization"] == "apikey test-key"
+    assert calls[0][1]["params"] == {"scope": "test"}
+
+
+def test_quantex_assets_rejects_malformed_market_catalogue(monkeypatch):
+    monkeypatch.setenv("MARKET_DATA_PROVIDER", "quantex")
+    monkeypatch.setattr(dc, "_qx_request", lambda *a: {"data": None})
+    with pytest.raises(MarketDataError, match="QUANTEX live pair catalogue"):
+        dc.get_assets()
