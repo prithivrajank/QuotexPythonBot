@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import platform
 from typing import Any
@@ -16,7 +17,12 @@ _max_request_seconds = 0.0
 def record_request(duration_seconds: float) -> None:
     """Record one completed HTTP request duration."""
     global _request_count, _total_request_seconds, _max_request_seconds
-    duration = max(0.0, float(duration_seconds))
+    try:
+        duration = float(duration_seconds)
+    except (TypeError, ValueError, OverflowError):
+        duration = 0.0
+    if not math.isfinite(duration) or duration < 0:
+        duration = 0.0
     with _lock:
         _request_count += 1
         _total_request_seconds += duration
