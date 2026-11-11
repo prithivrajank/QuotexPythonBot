@@ -210,8 +210,12 @@ def make_rsi_candles(up_steps, down_steps, cycles=10, start=1.0):
     rows = []
     price = start
     pattern = [0.01] * up_steps + [-0.01] * down_steps
-    for index in range(len(pattern) * cycles):
-        change = pattern[index % len(pattern)]
+    changes = pattern * cycles
+    if down_steps > up_steps:
+        # End with a modest recovery so RSI enters the PUT confirmation band
+        # while the slower EMA remains below the faster EMA.
+        changes.extend([0.01] * 4)
+    for index, change in enumerate(changes):
         close = price + change
         rows.append({
             "time": 1_700_000_000 + index * 60,
