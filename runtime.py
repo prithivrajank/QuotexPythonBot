@@ -26,6 +26,44 @@ DEFAULT_SYMBOLS = [
 ]
 DEFAULT_QUANTEX_SYMBOLS = ["EURUSD_otc", "GBPUSD_otc", "USDJPY_otc", "EURUSD", "GBPUSD", "USDJPY"]
 DEFAULT_A11KSA_SYMBOLS = ["EURUSD_otc"]
+MAX_CANDLE_AGE_MULTIPLIER = 2
+FUTURE_CANDLE_TOLERANCE_SECONDS = 5
+
+
+def validate_latest_candle(
+    candle: dict[str, Any],
+    timeframe_seconds: int,
+    now_timestamp: int | None = None,
+) -> int:
+    """Reject malformed, future-dated, or stale latest candles before signal use.
+
+    Candle timestamps represent the provider's candle timestamp. A latest candle
+    may be open or recently closed, so allow at most two timeframe intervals.
+    """
+    if not isinstance(timeframe_seconds, int) or timeframe_seconds <= 0:
+        raise ValueError("timeframe_seconds must be a positive integer")
+    try:
+        candle_timestamp = int(candle["time"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        raise MarketDataError("Provider latest candle has a missing or invalid timestamp.") from None
+    if candle_timestamp <= 0:
+        raise MarketDataError("Provider latest candle timestamp must be positive.")
+    now = (
+        int(datetime.now(timezone.utc).timestamp())
+        if now_timestamp is None else int(now_timestamp)
+    )
+    age_seconds = now - candle_timestamp
+    if age_seconds < -FUTURE_CANDLE_TOLERANCE_SECONDS:
+        raise MarketDataError(
+            f"Provider latest candle is future-dated by {abs(age_seconds)} seconds."
+        )
+    maximum_age = timeframe_seconds * MAX_CANDLE_AGE_MULTIPLIER
+    if age_seconds > maximum_age:
+        raise MarketDataError(
+            f"Latest candle is stale ({age_seconds}s old; maximum allowed is "
+            f"{maximum_age}s for a {timeframe_seconds}s timeframe)."
+        )
+    return max(0, age_seconds)
 
 
 def _normalize_symbol(value: str) -> str:
@@ -142,15 +180,22 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
         candles = get_candles(selected, timeframe_seconds, CANDLE_LIMIT)
         if not candles:
             raise MarketDataError("Provider returned zero candles.")
-        record_candle(candles[-1].get("time"))
+        latest = candles[-1]
+        candle_age_seconds = validate_latest_candle(latest, timeframe_seconds)
+        record_candle(latest.get("time"))
         if provider == "a11ksa":
-            latest = candles[-1]
             now = datetime.now(timezone.utc)
             snapshot = {
                 "available": True, "source": data_source_label(),
                 "market_type": "Quotex demo OTC (read-only)", "symbol": selected,
                 "watchlist": symbols, "timeframe_seconds": 60, "count": len(candles),
                 "updated_at": now.isoformat(), "latest_candle": latest,
+                "candle_age_seconds": candle_age_seconds,
+                "candle_status": (
+                    "CURRENT CANDLE WINDOW"
+                    if candle_age_seconds < timeframe_seconds
+                    else "LATEST CLOSED CANDLE"
+                ),
                 "recent_candles": candles[-10:],
                 "chart": {"candles": [{k: row[k] for k in ("time", "open", "high", "low", "close")} for row in candles]},
                 "read_only": True, "demo_only": True,
@@ -169,7 +214,6 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
             set_component("strategy", "down", "Strategy analysis failed.")
             raise
         pair_status = get_pair_status(selected)
-        latest = candles[-1]
         try:
             record = record_signal(selected, TIMEFRAME_SECONDS, latest, analysis)
             score_due_outcomes(selected, TIMEFRAME_SECONDS, latest, horizon_candles=5)
@@ -177,10 +221,13 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
             record_exception("database")
             set_component("database", "down", "Signal-history database write failed.")
             raise
-        now_ts = int(datetime.now(timezone.utc).timestamp())
-        candle_age_seconds = max(0, now_ts - int(latest["time"]))
-        # This labels the timestamp window only; REST polling does not guarantee tick-by-tick updates.
-        candle_status = "LIVE WINDOW (provider-update-dependent)" if candle_age_seconds < TIMEFRAME_SECONDS else "CLOSED / STALE"
+        # The latest candle was validated before analysis and database writes.
+        # This describes the candle timestamp window, not a live tick stream.
+        candle_status = (
+            "CURRENT CANDLE WINDOW"
+            if candle_age_seconds < TIMEFRAME_SECONDS
+            else "LATEST CLOSED CANDLE"
+        )
         snapshot = {
             "available": True,
             "candle_status": candle_status,
