@@ -119,17 +119,19 @@ def _otcharts_request(path: str, params: dict[str, Any] | None = None) -> dict[s
         )
     except requests.RequestException as exc:
         raise MarketDataError(f"Could not reach OTCharts API: {type(exc).__name__}.") from None
+    invalid_json = False
     try:
         body = response.json()
     except ValueError:
         body = {}
+        invalid_json = True
     if response.status_code == 401:
         raise MarketDataError("OTCharts rejected the API key (HTTP 401). Check OTCHARTS_API_KEY and confirm your email.")
     if response.status_code == 403:
         raise MarketDataError(f"OTCharts access denied (HTTP 403): {str(body.get('error', 'Check that your free key is set to the Quotex book and supports this instrument.'))[:180]}")
     if response.status_code == 429:
         raise MarketDataError("OTCharts request quota/stream limit reached (HTTP 429). Check your plan usage.")
-    if not response.ok or not isinstance(body, dict):
+    if not response.ok or invalid_json or not isinstance(body, dict):
         err = body.get("error", "Unexpected response") if isinstance(body, dict) else "Unexpected response"
         raise MarketDataError(f"OTCharts API error {response.status_code}: {str(err)[:180]}")
     if body.get("error"):
@@ -220,10 +222,12 @@ def _get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
             f"Could not reach Twelve Data: {type(exc).__name__}."
         ) from None
 
+    invalid_json = False
     try:
         payload = response.json()
     except ValueError:
         payload = {}
+        invalid_json = True
 
     if response.status_code == 401:
         raise MarketDataError("Twelve Data rejected the API key (HTTP 401). Check TWELVE_DATA_API_KEY.")
@@ -234,6 +238,8 @@ def _get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     if not response.ok:
         detail = payload.get("message", "") if isinstance(payload, dict) else ""
         raise MarketDataError(f"Twelve Data returned HTTP {response.status_code}. {str(detail)[:200]}")
+    if invalid_json:
+        raise MarketDataError("Twelve Data returned an unexpected JSON response.")
     if not isinstance(payload, dict):
         raise MarketDataError("Twelve Data returned an unexpected JSON response.")
     if payload.get("status") == "error" or "code" in payload and "message" in payload:
