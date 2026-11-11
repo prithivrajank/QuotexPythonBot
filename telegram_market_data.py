@@ -22,8 +22,15 @@ def notify_new_candle(snapshot: dict[str, Any]) -> dict[str, Any]:
     symbol = str(snapshot.get("symbol") or "").strip()
     try:
         candle_time = int(candle.get("time") or 0)
-    except (TypeError, ValueError):
+        if candle_time > 0:
+            candle_time_text = datetime.fromtimestamp(
+                candle_time, tz=timezone.utc
+            ).strftime("%Y-%m-%d %H:%M:%S UTC")
+        else:
+            candle_time_text = ""
+    except (TypeError, ValueError, OverflowError, OSError):
         candle_time = 0
+        candle_time_text = ""
     if not symbol or candle_time <= 0:
         return {"sent": False, "reason": "missing_symbol_or_candle_timestamp"}
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -37,8 +44,12 @@ def notify_new_candle(snapshot: dict[str, Any]) -> dict[str, Any]:
             return {"sent": False, "reason": "duplicate_candle"}
         market_type = str(candle.get("market_type") or snapshot.get("market_type") or "provider-specific")
         source = str(snapshot.get("source") or candle.get("source") or "configured provider")
-        timeframe = int(snapshot.get("timeframe_seconds") or 60)
-        candle_time_text = datetime.fromtimestamp(candle_time, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        try:
+            timeframe = int(snapshot.get("timeframe_seconds") or 60)
+        except (TypeError, ValueError, OverflowError):
+            timeframe = 60
+        if timeframe <= 0:
+            timeframe = 60
         message = (
             "New market-data candle (read-only)\n"
             f"Symbol: {symbol}\n"
