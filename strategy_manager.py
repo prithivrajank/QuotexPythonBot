@@ -6,6 +6,7 @@ replaces its seed rate. Selection is advisory for analysis only; it places no tr
 """
 from __future__ import annotations
 
+import math
 import os
 from typing import Any
 
@@ -17,7 +18,16 @@ SEED_WIN_RATES = {
     "SCORE_ENGINE_V2": 64.0,
     "BREAKOUT_V3": 71.0,
 }
-MIN_COMPLETED_SIGNALS = max(1, int(os.getenv("STRATEGY_PROMOTION_MIN_SIGNALS", "20")))
+def _minimum_completed_signals(raw: str | None = None) -> int:
+    """Read a safe positive promotion threshold; malformed config uses 20."""
+    value = os.getenv("STRATEGY_PROMOTION_MIN_SIGNALS", "20") if raw is None else raw
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError, OverflowError):
+        return 20
+
+
+MIN_COMPLETED_SIGNALS = _minimum_completed_signals()
 AUTO_SELECTION_DEFAULT = True
 
 
@@ -32,10 +42,24 @@ def get_strategy_manager_status() -> dict[str, Any]:
     for meta in list_strategies():
         name = meta["name"]
         observed = history.get(name, {})
-        scored = int(observed.get("scored_signals", 0) or 0)
-        measured_rate = observed.get("win_rate")
+        if not isinstance(observed, dict):
+            observed = {}
+        try:
+            scored = int(observed.get("scored_signals", 0) or 0)
+            if scored < 0:
+                scored = 0
+        except (TypeError, ValueError, OverflowError):
+            scored = 0
+        try:
+            parsed_rate = float(observed.get("win_rate"))
+        except (TypeError, ValueError, OverflowError):
+            parsed_rate = float("nan")
+        measured_rate = (
+            parsed_rate if math.isfinite(parsed_rate) and 0.0 <= parsed_rate <= 100.0
+            else None
+        )
         use_measured = scored >= MIN_COMPLETED_SIGNALS and measured_rate is not None
-        rate = float(measured_rate) if use_measured else SEED_WIN_RATES[name]
+        rate = measured_rate if use_measured else SEED_WIN_RATES[name]
         rows.append({
             **meta,
             "win_rate": round(rate, 2),
