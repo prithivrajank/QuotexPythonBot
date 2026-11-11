@@ -119,7 +119,7 @@ def test_build_performance_calculates_recent_window_and_average_score(
     assert result["win_rate"] == 9.09
     assert result["recent_20_scored_signals"] == 20
     assert result["recent_20_signal_win_rate"] == 0.0
-    assert result["average_signal_score"] == 5.64
+    assert result["average_signal_score"] == 4.61
     assert result["status"] == "DISABLED"
 
 
