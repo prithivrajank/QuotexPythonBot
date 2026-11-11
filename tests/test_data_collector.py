@@ -98,3 +98,37 @@ def test_quantex_rejects_inconsistent_ohlc(monkeypatch):
     })
     with pytest.raises(MarketDataError, match="inconsistent OHLC"):
         get_candles("EURUSD_otc", 60, 1)
+
+
+
+def test_unknown_provider_fails_closed_without_using_twelve_data(monkeypatch):
+    monkeypatch.setenv("MARKET_DATA_PROVIDER", "quantexx")
+    monkeypatch.setenv("TWELVE_DATA_API_KEY", "must-not-be-used")
+    monkeypatch.setattr(
+        data_collector,
+        "_get",
+        lambda *args, **kwargs: pytest.fail("unknown provider must not fall back"),
+    )
+
+    with pytest.raises(MarketDataError, match="Unsupported MARKET_DATA_PROVIDER"):
+        get_candles("EUR/USD", 60, 10)
+
+    status = connection_status()
+    assert status["connected"] is False
+    assert status["live_data"] is False
+    assert status["security_blocked"] is True
+    assert "quantexx" in status["message"]
+    assert "Unsupported" in status["source"]
+
+
+def test_unknown_provider_rejects_asset_catalogue(monkeypatch):
+    monkeypatch.setenv("MARKET_DATA_PROVIDER", "typo-provider")
+    with pytest.raises(MarketDataError, match="Unsupported MARKET_DATA_PROVIDER"):
+        data_collector.get_assets()
+
+
+@pytest.mark.parametrize("limit", [0, -1, 5001, True, 1.5])
+def test_all_provider_paths_reject_invalid_candle_limits(monkeypatch, limit):
+    monkeypatch.setenv("MARKET_DATA_PROVIDER", "otcharts")
+    with pytest.raises(ValueError, match="limit must be an integer"):
+        get_candles("EURUSD_otc", 60, limit)
