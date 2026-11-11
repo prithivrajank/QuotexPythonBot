@@ -78,7 +78,7 @@ def test_quantex_candles_normalize_sort_and_limit(monkeypatch):
     ]}}
     calls = []
     monkeypatch.setattr(dc, "_qx_request", lambda path, params: (calls.append((path, params)) or payload))
-    candles = dc.get_candles("eurusd_otc", 60, 1)
+    candles = dc.get_candles("EURUSD_otc", 60, 1)
     assert len(candles) == 1
     assert candles[0]["time"] == 120
     assert candles[0]["symbol"] == "EURUSD_otc"
@@ -156,7 +156,7 @@ def test_otcharts_candles_normalize_and_validate(monkeypatch):
         {"time": 120, "open": 1.1, "high": 1.3, "low": 1.0, "close": 1.2},
         {"time": 60, "open": 1.0, "high": 1.2, "low": 0.9, "close": 1.1},
     ]})
-    candles = dc.get_candles("eurusd_otc", 60, 2)
+    candles = dc.get_candles("EURUSD_otc", 60, 2)
     assert [c["time"] for c in candles] == [60, 120]
     assert candles[0]["symbol"] == "EURUSD_otc"
     assert candles[0]["venue"] == "otcharts"
