@@ -8,6 +8,12 @@ source =
     pair_performance
     data_collector
     runtime
+    quotexapi_provider
+    a11ksa_provider
+    a11ksa_candle_transport
+    browser_ws_parser
+    telegram_market_data
+    health_monitor
 omit =
     */tests/*
     */.venv/*
