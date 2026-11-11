@@ -156,12 +156,12 @@ def test_get_pair_performance_cache_hit_force_refresh_and_expiry(
         assert len(builds) == 2
 
         # The refresh at 399.999 expires exactly at 699.999.
-        clock["now"] = 699.999
+        clock["now"] = 699.998
         still_cached = pair_performance.get_pair_performance()
         assert still_cached["EURUSD"]["build"] == 2
         assert len(builds) == 2
 
-        clock["now"] = 700.0
+        clock["now"] = 699.999
         expired = pair_performance.get_pair_performance()
         assert expired["EURUSD"]["build"] == 3
         assert len(builds) == 3
