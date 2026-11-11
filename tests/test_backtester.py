@@ -79,7 +79,7 @@ def test_evaluate_expiry_counts_wait_put_wins_and_losses() -> None:
 
     assert result["total_signals"] == 5
     assert result["wait_signals"] == 1
-    assert result["call_signals"] == 1
+    assert result["call_signals"] == 2
     assert result["put_signals"] == 2
     assert result["wins"] == 2
     assert result["losses"] == 1
