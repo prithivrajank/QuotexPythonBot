@@ -23,6 +23,8 @@ def get_validation_payload(now: datetime | None = None) -> dict[str, Any]:
     """Aggregate the latest 500 signals, grade/pair/strategy analytics and periods."""
     init_history()
     now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
     now = now.astimezone(timezone.utc)
     since = int((now - timedelta(days=30)).timestamp())
     with _connection() as conn:
