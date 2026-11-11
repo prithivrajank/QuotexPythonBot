@@ -1,3 +1,5 @@
+import time
+
 import runtime
 
 
@@ -5,7 +7,7 @@ def test_a11ksa_refresh_never_runs_analysis_history_or_telegram(monkeypatch):
     monkeypatch.setenv("MARKET_DATA_PROVIDER", "a11ksa")
     monkeypatch.setenv("FOREX_SYMBOLS", "EURUSD_otc")
     candles = [{
-        "time": 1793803080, "open": 1.1, "high": 1.2, "low": 1.0, "close": 1.15,
+        "time": int(time.time()), "open": 1.1, "high": 1.2, "low": 1.0, "close": 1.15,
         "symbol": "EURUSD_otc", "timeframe_seconds": 60,
         "market_type": "Quotex demo OTC (read-only)",
     }]
