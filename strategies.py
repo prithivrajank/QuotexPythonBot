@@ -185,8 +185,12 @@ def analyze_candles(candles: list[dict], min_rows: int = 30) -> dict:
             grade, strength = "STRONG", "HIGH"
 
         if low_volatility:
-            # Downgrade signal strength one level without changing raw score/grade.
-            strength = "LOW" if strength == "MODERATE" else "MODERATE"
+            # Downgrade one level; never upgrade an already LOW signal.
+            strength = {
+                "HIGH": "MODERATE",
+                "MODERATE": "LOW",
+                "LOW": "LOW",
+            }[strength]
             expiry = 2
             expiry_reason = (
                 "ATR(14) is below recent average volatility; signal strength "
