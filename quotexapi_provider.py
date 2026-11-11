@@ -51,15 +51,15 @@ def _symbols() -> list[str]:
 
 
 def _account_mode() -> tuple[bool, str]:
-    """One account per Render process; switch using QUOTEX_ACCOUNT and redeploy."""
-    raw=os.getenv("QUOTEX_ACCOUNT", "").strip().lower()
-    if not raw:
-        legacy=os.getenv("QUOTEX_IS_DEMO", "true").strip().lower()
-        raw = "demo" if legacy in {"true","1","yes"} else "real"
-    if raw not in {"demo", "real"}:
-        raise ValueError("QUOTEX_ACCOUNT must be 'demo' or 'real'.")
-    is_demo=raw == "demo"
-    return is_demo, ("Demo" if is_demo else "Real")
+    """Enforce Demo-only access; real-account sessions are not supported."""
+    raw = os.getenv("QUOTEX_ACCOUNT", "demo").strip().lower() or "demo"
+    legacy = os.getenv("QUOTEX_IS_DEMO", "true").strip().lower() or "true"
+    if raw != "demo" or legacy not in {"true", "1", "yes"}:
+        raise ValueError(
+            "This project is Demo-only. Set QUOTEX_ACCOUNT=demo and "
+            "QUOTEX_IS_DEMO=true; Real-account access is blocked."
+        )
+    return True, "Demo"
 
 
 def _candle_from_payload(data: Any, symbol: str) -> dict[str, Any] | None:
@@ -114,7 +114,11 @@ def _on_quote(data: Any) -> None:
 
 
 def get_ticks() -> list[dict[str, Any]]:
-    """Return latest observed ticks; this is a snapshot, not a fabricated stream."""
+    """Return latest observed Demo ticks; never expose ticks when mode is blocked."""
+    try:
+        _account_mode()
+    except ValueError:
+        return []
     return [dict(_ticks[s]) for s in _symbols() if s in _ticks]
 
 
@@ -172,8 +176,9 @@ def _loop_worker() -> None:
 
 
 def _ensure_connection() -> Future | None:
-    """Start one persistent loop; back off after failed handshakes."""
+    """Start one persistent Demo loop; back off after failed handshakes."""
     global _loop_thread, _startup_future, _error, _retry_after
+    _, account_label = _account_mode()
     with _connection_lock:
         if _connected:
             return _startup_future
@@ -197,7 +202,7 @@ def _ensure_connection() -> Future | None:
             _retry_after = time.monotonic() + _RETRY_COOLDOWN_SECONDS
             return None
 
-        _error = f"Connecting to Quotex {_account_mode()[1]} account..."
+        _error = f"Connecting to Quotex {account_label} account..."
         _startup_future = asyncio.run_coroutine_threadsafe(_start(), _loop)
 
         def _record_start_error(future: Future) -> None:
@@ -212,44 +217,73 @@ def _ensure_connection() -> Future | None:
         _startup_future.add_done_callback(_record_start_error)
         return _startup_future
 
-def connection_status(start: bool = False) -> dict[str,Any]:
-    # Dashboard status polling must be passive; do not open a broker connection
-    # while the user has the bot OFF. Explicit candle refresh starts it instead.
+def connection_status(start: bool = False) -> dict[str, Any]:
+    # Dashboard status polling is passive and must never bypass the Demo-only gate.
+    try:
+        _, account_label = _account_mode()
+    except ValueError as exc:
+        return {
+            "connected": False,
+            "live_data": False,
+            "credentials_configured": bool(os.getenv("QUOTEX_SSID", "").strip()),
+            "message": str(exc),
+            "source": SOURCE,
+            "market_type": "Quotex Demo only",
+            "account_mode": "blocked",
+            "security_blocked": True,
+            "read_only": True,
+            "affiliation": "Unofficial community API; not operated by Quotex.",
+        }
     if start and not _connected:
         _ensure_connection()
     has_rows = any(_rows.values())
     return {
         "connected": _connected,
         "live_data": has_rows,
-        "credentials_configured": bool(os.getenv("QUOTEX_SSID")),
+        "credentials_configured": bool(os.getenv("QUOTEX_SSID", "").strip()),
         "message": (
             "Authenticated; verified OHLC events are arriving."
             if has_rows else
             ("Authenticated; waiting for validated candle events." if _connected else
              (_error if _error and _error != "Quotex Demo SSID is not configured." else
-              ("Quotex SSID is configured; connection has not been attempted while the bot is OFF."
+              ("Quotex Demo session is configured; connection has not been attempted while the bot is OFF."
                if os.getenv("QUOTEX_SSID", "").strip() else
-               "Quotex SSID is not configured.")))
+               "Quotex Demo session is not configured.")))
         ),
         "source": SOURCE,
-        "market_type": "Quotex OTC + live forex",
-        "account_mode": os.getenv("QUOTEX_ACCOUNT", "demo").strip().lower(),
+        "market_type": "Quotex Demo OTC + Demo forex",
+        "account_mode": account_label.lower(),
         "events_received": _events,
         "ticks_received": len(_ticks),
         "tick_symbols": sorted(_ticks),
+        "security_blocked": False,
         "read_only": True,
         "affiliation": "Unofficial community API; not operated by Quotex.",
     }
 
-def get_assets() -> list[dict[str,Any]]:
+def get_assets() -> list[dict[str, Any]]:
     # The upstream get_assets() implementation currently returns mock items.
-    # Do not represent those as verified broker catalogue data.
-    return [{"symbol":s,"name":s,"market_type":"Quotex OTC" if s.lower().endswith("_otc") else "Quotex live forex","source":SOURCE} for s in _symbols()]
+    # Do not represent these display helpers as a verified broker catalogue.
+    _account_mode()
+    return [
+        {
+            "symbol": symbol,
+            "name": symbol,
+            "market_type": "Quotex Demo OTC" if symbol.lower().endswith("_otc") else "Quotex Demo forex",
+            "source": SOURCE,
+        }
+        for symbol in _symbols()
+    ]
 
 
-def get_candles(asset: str,timeframe_seconds: int,limit: int=100) -> list[dict[str,Any]]:
-    if timeframe_seconds!=60:
+def get_candles(asset: str, timeframe_seconds: int, limit: int = 100) -> list[dict[str, Any]]:
+    _account_mode()
+    if not isinstance(asset, str) or not asset.strip():
+        raise ValueError("asset must not be empty")
+    if timeframe_seconds != 60:
         raise ValueError("ChipaDevTeam integration currently supports only 60-second subscriptions.")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 500:
+        raise ValueError("limit must be an integer between 1 and 500")
     symbol=asset.strip().replace("/","").replace("-","").upper()
     if symbol.endswith("_OTC"):
         symbol=symbol[:-4]+"_otc"
