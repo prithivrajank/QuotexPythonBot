@@ -64,19 +64,20 @@ def test_run_backtest_requires_sufficient_history() -> None:
 
 def test_evaluate_expiry_counts_wait_put_wins_and_losses() -> None:
     """Score directional CALL/PUT results and count WAIT decisions separately."""
-    candles = make_candles(34)
-    # The decision indexes for expiry=1 are 29, 30, 31 and 32.
+    candles = make_candles(35)
+    # The decision indexes for expiry=1 are 29 through 33.
     candles[30]["close"] = 1.0
     candles[31]["close"] = 1.1
     candles[32]["close"] = 1.0
     candles[33]["close"] = 1.1
-    signals = iter(["WAIT", "CALL", "PUT", "PUT"])
+    candles[34]["close"] = 1.1
+    signals = iter(["WAIT", "CALL", "PUT", "PUT", "CALL"])
 
     result = backtester._evaluate_expiry(
         candles, 1, lambda _history: {"signal": next(signals)}
     )
 
-    assert result["total_signals"] == 4
+    assert result["total_signals"] == 5
     assert result["wait_signals"] == 1
     assert result["call_signals"] == 1
     assert result["put_signals"] == 2
