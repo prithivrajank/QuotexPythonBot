@@ -1,6 +1,7 @@
 """Read-only technical indicators and scored heuristic analysis for OHLC candles."""
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 REQUIRED = {"open", "high", "low", "close"}
@@ -16,6 +17,9 @@ def _frame(candles: list[dict]) -> pd.DataFrame:
     for col in REQUIRED:
         df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.dropna(subset=list(REQUIRED)).reset_index(drop=True)
+    numeric = df[list(REQUIRED)].to_numpy(dtype=float)
+    finite_positive = np.isfinite(numeric).all(axis=1) & (numeric > 0).all(axis=1)
+    df = df.loc[finite_positive].reset_index(drop=True)
     valid = (
         (df["high"] >= df["low"])
         & (df["high"] >= df[["open", "close"]].max(axis=1))
