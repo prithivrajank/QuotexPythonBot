@@ -40,7 +40,7 @@ def validate_latest_candle(
     Candle timestamps represent the provider's candle timestamp. A latest candle
     may be open or recently closed, so allow at most two timeframe intervals.
     """
-    if not isinstance(timeframe_seconds, int) or timeframe_seconds <= 0:
+    if not isinstance(timeframe_seconds, int) or isinstance(timeframe_seconds, bool) or timeframe_seconds <= 0:
         raise ValueError("timeframe_seconds must be a positive integer")
     try:
         candle_timestamp = int(candle["time"])
