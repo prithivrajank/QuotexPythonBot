@@ -4,7 +4,7 @@ Uses a user-supplied browser SSID. It never calls any order/trading methods.
 Only explicit quote and OHLC events are accepted; no prices or candles are fabricated.
 """
 from __future__ import annotations
-import asyncio, os, re, threading, time
+import asyncio, math, os, re, threading, time
 from collections import defaultdict
 from concurrent.futures import Future, TimeoutError as FutureTimeout
 from typing import Any
@@ -76,10 +76,17 @@ def _candle_from_payload(data: Any, symbol: str) -> dict[str, Any] | None:
             o=float(x.get("open",x.get("o"))); h=float(x.get("high",x.get("h")))
             lo=float(x.get("low",x.get("l"))); c=float(x.get("close",x.get("c")))
             ts=int(x.get("time",x.get("timestamp",x.get("from",0))))
-        except (TypeError,ValueError):
+        except (TypeError, ValueError, OverflowError):
             continue
-        if ts>10_000_000_000: ts//=1000
-        if ts<=0 or h<max(o,lo,c) or lo>min(o,h,c): continue
+        if ts > 10_000_000_000:
+            ts //= 1000
+        if (
+            ts <= 0
+            or any(not math.isfinite(value) or value <= 0 for value in (o, h, lo, c))
+            or h < max(o, lo, c)
+            or lo > min(o, h, c)
+        ):
+            continue
         market_type = "Quotex OTC" if symbol.lower().endswith("_otc") else "Quotex live forex"
         return {"time":ts,"open":o,"high":h,"low":lo,"close":c,"symbol":symbol,
                 "timeframe_seconds":60,"venue":"quotexapi","market_type":market_type,"source":SOURCE}
@@ -97,11 +104,11 @@ def _on_quote(data: Any) -> None:
     try:
         price = float(price_value)
         timestamp = float(data.get("time", data.get("timestamp", time.time())))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return
     if timestamp > 10_000_000_000:
         timestamp /= 1000
-    if not (price > 0 and timestamp > 0):
+    if not (math.isfinite(price) and math.isfinite(timestamp) and price > 0 and timestamp > 0):
         return
     for symbol in _symbols():
         if asset == symbol.lower():
@@ -211,7 +218,7 @@ def _ensure_connection() -> Future | None:
                 future.result()
                 _retry_after = 0.0
             except Exception as exc:
-                _error = f"QuotexAPI connection failed: {type(exc).__name__}: {str(exc)[:200]}"
+                _error = f"QuotexAPI connection failed: {type(exc).__name__}"
                 _retry_after = time.monotonic() + _RETRY_COOLDOWN_SECONDS
 
         _startup_future.add_done_callback(_record_start_error)
@@ -295,7 +302,7 @@ def get_candles(asset: str, timeframe_seconds: int, limit: int = 100) -> list[di
             except FutureTimeout:
                 raise RuntimeError("Timed out waiting for the Quotex WebSocket connection.")
             except Exception as exc:
-                raise RuntimeError(f"Quotex connection failed: {type(exc).__name__}: {str(exc)[:160]}") from exc
+                raise RuntimeError(f"Quotex connection failed: {type(exc).__name__}") from None
     rows=list(_rows.get(symbol,[]))
     if len(rows)<30:
         raise RuntimeError(f"No verified OHLC stream yet for {symbol}; received {len(rows)} candle bars.")
