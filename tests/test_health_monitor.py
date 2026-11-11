@@ -121,7 +121,8 @@ def test_snapshot_reports_warning_for_missing_first_candle_and_signal(monkeypatc
 
 
 def test_snapshot_can_report_critical_health_and_provider_disconnection(monkeypatch):
-    monkeypatch.setattr(hm, "database_check", lambda: {"status": "down"})
+    monkeypatch.setattr(hm, "database_check", lambda: hm._COMPONENTS["database"])
+    hm.set_component("database", "down")
     hm.set_component("websocket", "degraded")
     hm.set_component("telegram", "degraded")
     hm.set_component("strategy", "down")
