@@ -19,12 +19,39 @@ SOURCE = "Twelve Data standard forex (independent provider; not Quotex OTC)"
 
 QUANTEX_BASE_URL = "https://api.quantexbot.pro/v1"
 OTCHARTS_BASE_URL = "https://otcharts.com"
+SUPPORTED_PROVIDERS = frozenset({
+    "twelve_data", "a11ksa", "quotexapi", "otcharts", "quantex"
+})
+
 
 def _provider() -> str:
-    return os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower()
+    """Return a supported provider or fail closed on unknown configuration."""
+    provider = os.getenv("MARKET_DATA_PROVIDER", "twelve_data").strip().lower() or "twelve_data"
+    if provider not in SUPPORTED_PROVIDERS:
+        raise MarketDataError(
+            f"Unsupported MARKET_DATA_PROVIDER '{provider}'. "
+            f"Choose one of: {', '.join(sorted(SUPPORTED_PROVIDERS))}."
+        )
+    return provider
+
 
 def data_source_label() -> str:
-    return ("A11KSA demo-only read-only candle adapter (TLS/protocol gate enabled)" if _provider() == "a11ksa" else "ChipaDevTeam QuotexAPI WebSocket (unofficial)" if _provider() == "quotexapi" else "OTCharts third-party Quotex market-data API (not operated by Quotex)" if _provider() == "otcharts" else "QUANTEX third-party Quotex market-data API (not operated by Quotex)" if _provider() == "quantex" else SOURCE)
+    try:
+        provider = _provider()
+    except MarketDataError:
+        configured = os.getenv("MARKET_DATA_PROVIDER", "").strip().lower() or "(empty)"
+        return f"Unsupported market-data provider configuration: {configured}"
+    return (
+        "A11KSA demo-only read-only candle adapter (TLS/protocol gate enabled)"
+        if provider == "a11ksa"
+        else "ChipaDevTeam QuotexAPI WebSocket (unofficial)"
+        if provider == "quotexapi"
+        else "OTCharts third-party Quotex market-data API (not operated by Quotex)"
+        if provider == "otcharts"
+        else "QUANTEX third-party Quotex market-data API (not operated by Quotex)"
+        if provider == "quantex"
+        else SOURCE
+    )
 
 def _qx_request(path: str, params: dict[str, Any]) -> dict[str, Any]:
     key = os.getenv("QUANTEX_API_KEY", "").strip()
@@ -131,7 +158,7 @@ def _otcharts_candles(asset: str, timeframe_seconds: int, limit: int) -> list[di
             vals = {k: float(row[k]) for k in ("open", "high", "low", "close")}
         except (KeyError, TypeError, ValueError, OverflowError):
             raise MarketDataError(f"OTCharts candle #{i + 1} has invalid fields.") from None
-        if timestamp < 0 or any(not math.isfinite(v) for v in vals.values()):
+        if timestamp <= 0 or any(not math.isfinite(v) for v in vals.values()):
             raise MarketDataError(f"OTCharts candle #{i + 1} contains invalid values.")
         o, h, low, c = vals["open"], vals["high"], vals["low"], vals["close"]
         if h < max(o, c, low) or low > min(o, c, h):
@@ -216,21 +243,32 @@ def _get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
 
 
 def connection_status() -> dict[str, Any]:
-    """Validate the selected market-data provider."""
-    if _provider() == "a11ksa":
+    """Validate the selected market-data provider without guessing on typos."""
+    try:
+        provider = _provider()
+    except MarketDataError as exc:
+        return {
+            "connected": False,
+            "live_data": False,
+            "credentials_configured": False,
+            "message": str(exc),
+            "source": data_source_label(),
+            "security_blocked": True,
+        }
+    if provider == "a11ksa":
         from a11ksa_provider import connection_status as a11ksa_connection_status
         return a11ksa_connection_status()
-    if _provider() == "quotexapi":
+    if provider == "quotexapi":
         from quotexapi_provider import connection_status
         return connection_status()
-    if _provider() == "otcharts":
+    if provider == "otcharts":
         if not os.getenv("OTCHARTS_API_KEY", "").strip():
             return {"connected": False, "live_data": False, "credentials_configured": False,
                     "message": "OTCHARTS_API_KEY is missing. Add it in Render Environment.", "source": data_source_label()}
         return {"connected": True, "live_data": False, "credentials_configured": True,
                 "message": "OTCharts key is configured but not yet validated. Use Refresh selected pair to test access. Free tier: 200 requests in the first month, five instruments, no live streaming; automatic polling is disabled to preserve quota.",
                 "source": data_source_label(), "market_type": "Quotex OTC", "manual_refresh_only": True, "affiliation": "Third-party provider; not operated by Quotex."}
-    if _provider() == "quantex":
+    if provider == "quantex":
         if not os.getenv("QUANTEX_API_KEY", "").strip():
             return {"connected": False, "live_data": False, "credentials_configured": False,
                     "message": "QUANTEX_API_KEY is missing. Add it in Render Environment.", "source": data_source_label()}
@@ -279,13 +317,14 @@ def connection_status() -> dict[str, Any]:
 
 def get_assets() -> list[dict[str, Any]]:
     """Fetch the selected provider's available pair catalogue."""
-    if _provider() == "a11ksa":
+    provider = _provider()
+    if provider == "a11ksa":
         from a11ksa_provider import get_assets as a11ksa_assets
         return a11ksa_assets()
-    if _provider() == "quotexapi":
+    if provider == "quotexapi":
         from quotexapi_provider import get_assets as quotex_assets
         return quotex_assets()
-    if _provider() == "otcharts":
+    if provider == "otcharts":
         body = _otcharts_request("v1/symbols", {"venue": "quotex"})
         pairs = body.get("symbols", [])
         if not isinstance(pairs, list) or not pairs:
@@ -294,7 +333,7 @@ def get_assets() -> list[dict[str, Any]]:
                  "market_type": "Quotex OTC" if str(pair["symbol"]).lower().endswith("_otc") else "Quotex",
                  "venue": "otcharts", "source": data_source_label()}
                 for pair in pairs if isinstance(pair, dict) and isinstance(pair.get("symbol"), str)]
-    if _provider() == "quantex":
+    if provider == "quantex":
         result: list[dict[str, Any]] = []
         broker = os.getenv("QUANTEX_BROKER", "quotex")
         for market in ("live", "otc"):
@@ -333,17 +372,20 @@ def get_candles(
     """Fetch real standard-forex OHLC bars, oldest first; never fabricate candles."""
     if not isinstance(asset, str) or not asset.strip():
         raise ValueError("asset must not be empty")
-    if _provider() == "a11ksa":
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 5000:
+        raise ValueError("limit must be an integer between 1 and 5000")
+    provider = _provider()
+    if provider == "a11ksa":
         from a11ksa_provider import get_candles as a11ksa_candles
         return a11ksa_candles(asset, timeframe_seconds, limit)
-    if _provider() == "quotexapi":
+    if provider == "quotexapi":
         from quotexapi_provider import get_candles as quotex_candles
         return quotex_candles(asset, timeframe_seconds, limit)
-    if _provider() == "otcharts":
+    if provider == "otcharts":
         if any(ch.isspace() for ch in asset.strip()):
             raise ValueError("asset must be a pair symbol without spaces")
         return _otcharts_candles(asset, timeframe_seconds, limit)
-    if _provider() == "quantex":
+    if provider == "quantex":
         if any(ch.isspace() for ch in asset.strip()):
             raise ValueError("asset must be a pair symbol without spaces")
         return _qx_candles(asset, timeframe_seconds, limit)
