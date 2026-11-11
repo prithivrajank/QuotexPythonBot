@@ -131,8 +131,6 @@ def _write_report(report: dict[str, Any]) -> str | None:
 
 def run_resilience_suite() -> dict[str, Any]:
     """Run five isolated fault scenarios and verify bounded retry recovery."""
-    with _LOCK:
-        before = dict(_METRICS)
     scenarios = [
         _scenario("websocket_disconnect", _websocket_disconnect),
         _scenario("telegram_timeout", _telegram_timeout),
