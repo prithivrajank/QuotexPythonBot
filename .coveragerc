@@ -14,6 +14,14 @@ source =
     browser_ws_parser
     telegram_market_data
     health_monitor
+    resilience
+    observability
+    strategy_manager
+    strategy_registry
+    walkforward
+    validation_dashboard
+    weekly_report
+    production_checklist
 omit =
     */tests/*
     */.venv/*
