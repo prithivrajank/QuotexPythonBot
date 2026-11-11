@@ -126,7 +126,7 @@ def test_otcharts_request_requires_key(monkeypatch):
         (FakeResponse(401, {"error": "bad key"}), "HTTP 401"),
         (FakeResponse(403, {"error": "book not enabled"}), "book not enabled"),
         (FakeResponse(429, {"error": "quota"}), "HTTP 429"),
-        (FakeResponse(503, {"error": "offline"}), "HTTP 503"),
+        (FakeResponse(503, {"error": "offline"}), "API error 503"),
         (FakeResponse(200, {"error": "provider error"}), "provider error"),
         (FakeResponse(200, ["unexpected"]), "Unexpected response"),
         (FakeResponse(200, None, json_error=True), "Unexpected response"),
