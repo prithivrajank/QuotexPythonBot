@@ -17,7 +17,7 @@ VALIDATION_RATIO = 0.30
 
 def run_walkforward(candles: list[dict], symbol: str, expiry: int = 1) -> dict[str, Any]:
     """Split chronological candles 70/30 and evaluate each period independently."""
-    if expiry not in (1, 2, 3):
+    if isinstance(expiry, bool) or expiry not in (1, 2, 3):
         raise ValueError("expiry must be 1, 2, or 3 candles")
 
     if not isinstance(candles, list):
