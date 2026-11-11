@@ -299,6 +299,7 @@ def test_twelve_data_candles_reject_malformed_rows(monkeypatch, rows, message):
 
 
 def test_connection_status_handles_provider_failure(monkeypatch):
+    monkeypatch.setenv("MARKET_DATA_PROVIDER", "twelve_data")
     monkeypatch.setenv("TWELVE_DATA_API_KEY", "test-key")
     monkeypatch.setattr(dc, "_get", lambda *a: (_ for _ in ()).throw(MarketDataError("offline")))
     status = dc.connection_status()
