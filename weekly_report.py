@@ -30,7 +30,10 @@ def _connect() -> sqlite3.Connection:
 
 def record_health_snapshot(health: dict[str, Any], captured_at: datetime | None = None) -> None:
     """Persist one health-score observation for the weekly trend."""
-    timestamp = (captured_at or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
+    captured = captured_at or datetime.now(timezone.utc)
+    if captured.tzinfo is None:
+        captured = captured.replace(tzinfo=timezone.utc)
+    timestamp = captured.astimezone(timezone.utc).isoformat()
     with _connect() as conn:
         conn.execute(
             """CREATE TABLE IF NOT EXISTS weekly_health_snapshots (
@@ -87,7 +90,10 @@ def _rate(wins: int, losses: int) -> float | None:
 
 def generate_weekly_report(now: datetime | None = None) -> dict[str, Any]:
     """Build a UTC rolling seven-day summary, ending at the supplied/current time."""
-    end = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    end = now or datetime.now(timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    end = end.astimezone(timezone.utc)
     start = end - timedelta(days=7)
     signals, health = _load_data(start, end)
 
