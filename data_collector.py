@@ -85,11 +85,14 @@ def _qx_candles(asset: str, timeframe_seconds: int, limit: int) -> list[dict[str
     else:
         symbol = symbol.replace("/", "").replace("-", "").upper()
     body = _qx_request("candles", {"broker": os.getenv("QUANTEX_BROKER", "quotex"), "pair": symbol, "tf": tf, "limit": min(limit, 1000)})
-    rows = body.get("data", {}).get("candles", [])
+    data = body.get("data", {})
+    rows = data.get("candles") if isinstance(data, dict) else None
     if not isinstance(rows, list):
         raise MarketDataError("QUANTEX response did not contain a candles list.")
     result = []
     for i, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise MarketDataError(f"QUANTEX candle #{i + 1} is not an object.")
         try:
             timestamp = int(row.get("epoch") or datetime.fromisoformat(str(row["time"]).replace("Z", "+00:00")).timestamp())
             vals = {k: float(row[k]) for k in ("open", "high", "low", "close")}
@@ -128,7 +131,8 @@ def _otcharts_request(path: str, params: dict[str, Any] | None = None) -> dict[s
     if response.status_code == 401:
         raise MarketDataError("OTCharts rejected the API key (HTTP 401). Check OTCHARTS_API_KEY and confirm your email.")
     if response.status_code == 403:
-        raise MarketDataError(f"OTCharts access denied (HTTP 403): {str(body.get('error', 'Check that your free key is set to the Quotex book and supports this instrument.'))[:180]}")
+        detail = body.get("error", "Check that your free key is set to the Quotex book and supports this instrument.") if isinstance(body, dict) else "Unexpected response"
+        raise MarketDataError(f"OTCharts access denied (HTTP 403): {str(detail)[:180]}")
     if response.status_code == 429:
         raise MarketDataError("OTCharts request quota/stream limit reached (HTTP 429). Check your plan usage.")
     if not response.ok or invalid_json or not isinstance(body, dict):
@@ -280,7 +284,10 @@ def connection_status() -> dict[str, Any]:
                     "message": "QUANTEX_API_KEY is missing. Add it in Render Environment.", "source": data_source_label()}
         try:
             body = _qx_request("pairs", {"broker": os.getenv("QUANTEX_BROKER", "quotex"), "market": "otc", "open": "true"})
-            count = len(body.get("data", []))
+            pairs = body.get("data")
+            if not isinstance(pairs, list):
+                raise MarketDataError("QUANTEX pair catalogue response did not contain a data list.")
+            count = len(pairs)
         except MarketDataError as exc:
             return {"connected": False, "live_data": False, "credentials_configured": True, "message": str(exc), "source": data_source_label()}
         return {"connected": True, "live_data": False, "credentials_configured": True,
@@ -344,7 +351,10 @@ def get_assets() -> list[dict[str, Any]]:
         broker = os.getenv("QUANTEX_BROKER", "quotex")
         for market in ("live", "otc"):
             body = _qx_request("pairs", {"broker": broker, "market": market, "open": "true"})
-            for pair in body.get("data", []):
+            pairs = body.get("data")
+            if not isinstance(pairs, list):
+                raise MarketDataError(f"QUANTEX {market} pair catalogue did not contain a data list.")
+            for pair in pairs:
                 if isinstance(pair, dict) and isinstance(pair.get("symbol"), str):
                     result.append({"symbol": pair["symbol"], "name": pair.get("name", pair["symbol"]),
                                    "market_type": market, "venue": "quantex", "source": data_source_label()})
@@ -401,9 +411,6 @@ def get_candles(
         raise ValueError("asset must be a symbol such as EUR/USD without spaces")
     if timeframe_seconds not in TIMEFRAME_MAP:
         raise ValueError(f"timeframe_seconds must be one of {sorted(TIMEFRAME_MAP)}")
-    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 5000:
-        raise ValueError("limit must be an integer between 1 and 5000")
-
     payload = _get("time_series", {
         "symbol": symbol,
         "interval": TIMEFRAME_MAP[timeframe_seconds],
