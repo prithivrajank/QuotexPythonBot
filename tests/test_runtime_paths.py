@@ -86,7 +86,7 @@ def test_snapshot_and_watchlist_return_safe_empty_state(monkeypatch):
     assert snapshot["available"] is False
     assert "Waiting" in snapshot["message"]
     assert watchlist["symbols"] == ["EURUSD_otc", "GBPUSD_otc"]
-    assert "manual-refresh only" in watchlist["note"]
+    assert "manual refresh only" in watchlist["note"]
 
 
 def test_snapshot_returns_existing_symbol_and_latest_watchlist_entry(monkeypatch):
@@ -97,7 +97,7 @@ def test_snapshot_returns_existing_symbol_and_latest_watchlist_entry(monkeypatch
     monkeypatch.setattr(runtime, "_snapshots", entries)
     monkeypatch.setenv("MARKET_DATA_PROVIDER", "twelve_data")
     assert runtime.get_snapshot("EUR/USD") == entries["EUR/USD"]
-    assert runtime.get_snapshot()["symbol"] if "symbol" in runtime.get_snapshot() else runtime.get_snapshot()["available"] is False
+    assert runtime.get_snapshot()["updated_at"] == entries["GBP/USD"]["updated_at"]
     watchlist = runtime.get_watchlist()
     assert watchlist["scanned"]["EUR/USD"]["available"] is True
     assert watchlist["scanned"]["GBP/USD"]["available"] is False
@@ -141,6 +141,7 @@ def test_a11ksa_runtime_snapshot_is_candle_only(monkeypatch):
     monkeypatch.setenv("MARKET_DATA_PROVIDER", "a11ksa")
     monkeypatch.setenv("FOREX_SYMBOLS", "EURUSD_otc")
     rows = [candle()]
+    rows[0]["market_type"] = "Quotex OTC"
     monkeypatch.setattr(runtime, "get_candles", lambda *args: rows)
     monkeypatch.setattr(runtime, "record_candle", lambda *args: None)
     monkeypatch.setattr(
@@ -152,7 +153,8 @@ def test_a11ksa_runtime_snapshot_is_candle_only(monkeypatch):
     assert result["read_only"] is True
     assert result["demo_only"] is True
     assert result["telegram_configured"] is False
-    assert result["analysis"] if "analysis" in result else result["message"].endswith("disabled.")
+    assert "analysis" not in result
+    assert result["message"].endswith("disabled.")
 
 
 def _patch_successful_standard_refresh(monkeypatch, pair_status="ACTIVE"):
