@@ -6,13 +6,14 @@ to persistent storage; on ephemeral Render storage it resets with the instance.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from html import escape
 import json
 import os
 from pathlib import Path
 import sqlite3
-from typing import Any
+from typing import Any, Iterator
 
 DEFAULT_DB_PATH = "/tmp/forex_signal_history.db"
 DEFAULT_REPORT_DIR = "/tmp/weekly_reports"
@@ -22,10 +23,16 @@ def _db_path() -> str:
     return os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
 
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
+    """Open a report database connection and always close it after use."""
     conn = sqlite3.connect(_db_path(), timeout=10)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def record_health_snapshot(health: dict[str, Any], captured_at: datetime | None = None) -> None:
