@@ -6,6 +6,8 @@ source =
     backtester
     signal_history
     pair_performance
+    data_collector
+    runtime
 omit =
     */tests/*
     */.venv/*
