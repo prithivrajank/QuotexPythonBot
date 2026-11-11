@@ -22,6 +22,11 @@ def run_walkforward(candles: list[dict], symbol: str, expiry: int = 1) -> dict[s
 
     if not isinstance(candles, list):
         raise ValueError("candles must be a list of timestamped OHLC records")
+    if len(candles) < 110:
+        raise ValueError(
+            "At least 110 chronological candles are required so both the "
+            "70% training and 30% validation periods contain enough history"
+        )
     seen_timestamps: set[int] = set()
     normalized: list[tuple[int, dict]] = []
     for index, row in enumerate(candles):
