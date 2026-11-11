@@ -112,7 +112,10 @@ def test_observability_memory_usage_success_path(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "resource",
-        SimpleNamespace(getrusage=lambda _who: SimpleNamespace(ru_maxrss=2048)),
+        SimpleNamespace(
+            RUSAGE_SELF=0,
+            getrusage=lambda _who: SimpleNamespace(ru_maxrss=2048),
+        ),
     )
     monkeypatch.setattr(observability.platform, "system", lambda: "Linux")
     result = observability._memory_usage()
