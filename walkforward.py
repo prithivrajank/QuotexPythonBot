@@ -20,7 +20,25 @@ def run_walkforward(candles: list[dict], symbol: str, expiry: int = 1) -> dict[s
     if expiry not in (1, 2, 3):
         raise ValueError("expiry must be 1, 2, or 3 candles")
 
-    ordered = sorted(candles, key=lambda row: int(row.get("time", 0)))
+    if not isinstance(candles, list):
+        raise ValueError("candles must be a list of timestamped OHLC records")
+    seen_timestamps: set[int] = set()
+    normalized: list[tuple[int, dict]] = []
+    for index, row in enumerate(candles):
+        if not isinstance(row, dict):
+            raise ValueError(f"candle #{index + 1} is not an object")
+        raw_timestamp = row.get("time")
+        if isinstance(raw_timestamp, bool):
+            raise ValueError(f"candle #{index + 1} has an invalid timestamp")
+        try:
+            timestamp = int(raw_timestamp)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError(f"candle #{index + 1} has an invalid timestamp") from None
+        if timestamp <= 0 or timestamp in seen_timestamps:
+            raise ValueError(f"candle #{index + 1} has a non-positive or duplicate timestamp")
+        seen_timestamps.add(timestamp)
+        normalized.append((timestamp, row))
+    ordered = [row for _timestamp, row in sorted(normalized, key=lambda item: item[0])]
     split_index = int(len(ordered) * TRAINING_RATIO)
     training = ordered[:split_index]
     validation = ordered[split_index:]
