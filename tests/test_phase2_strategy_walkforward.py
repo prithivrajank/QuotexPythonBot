@@ -120,7 +120,10 @@ def test_strategy_registry_rejects_short_or_invalid_history_with_wait():
 
 @pytest.mark.parametrize("bad_price", [0.0, -1.0, float("nan"), float("inf"), float("-inf")])
 def test_strategy_registry_does_not_generate_signals_from_invalid_ohlc(bad_price):
-    rows = candles(40)
+    rows = [
+        {**row, "open": 1.0, "high": 1.01, "low": 0.99, "close": 1.0}
+        for row in candles(40)
+    ]
     rows[-1]["close"] = bad_price
     result = strategy_registry.analyze_with_strategy(rows, "BREAKOUT_V3")
     assert result["signal"] == "WAIT"
