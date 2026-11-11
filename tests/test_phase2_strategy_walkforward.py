@@ -205,3 +205,38 @@ def test_walkforward_rejects_invalid_or_duplicate_timestamps(bad_rows):
 def test_walkforward_rejects_insufficient_data():
     with pytest.raises(ValueError, match="110 chronological candles"):
         walkforward.run_walkforward(candles(109), "EUR/USD")
+
+def make_rsi_candles(up_steps, down_steps, cycles=10, start=1.0):
+    rows = []
+    price = start
+    pattern = [0.01] * up_steps + [-0.01] * down_steps
+    for index in range(len(pattern) * cycles):
+        change = pattern[index % len(pattern)]
+        close = price + change
+        rows.append({
+            "time": 1_700_000_000 + index * 60,
+            "open": price,
+            "high": max(price, close) + 0.002,
+            "low": min(price, close) - 0.002,
+            "close": close,
+        })
+        price = close
+    return rows
+
+
+@pytest.mark.parametrize(
+    ("up", "down", "start", "expected"),
+    [
+        (7, 3, 1.0, "CALL"),
+        (4, 8, 2.0, "PUT"),
+        (10, 0, 1.0, "WAIT"),
+    ],
+)
+def test_ema_rsi_strategy_direction_and_rsi_filter(up, down, start, expected):
+    result = strategy_registry.analyze_with_strategy(
+        make_rsi_candles(up, down, start=start), "EMA_RSI_V1"
+    )
+    assert result["signal"] == expected
+    assert result["strategy_name"] == "EMA_RSI_V1"
+    assert result["strategy_version"] == "1.0.0"
+    assert result["rsi_14"] is not None
