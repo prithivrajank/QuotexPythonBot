@@ -12,7 +12,7 @@ def test_a11ksa_refresh_never_runs_analysis_history_or_telegram(monkeypatch):
     monkeypatch.setattr(runtime, "get_candles", lambda *args: candles)
     def forbidden(*args, **kwargs):
         raise AssertionError("A11KSA candle-only mode must not run signal or alert code")
-    monkeypatch.setattr(runtime, "analyze_candles", forbidden)
+    monkeypatch.setattr(runtime, "analyze_candles", forbidden, raising=False)
     monkeypatch.setattr(runtime, "record_signal", forbidden)
     monkeypatch.setattr(runtime, "score_due_outcomes", forbidden)
     monkeypatch.setattr(runtime, "notify_new_candle", forbidden)

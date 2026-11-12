@@ -20,3 +20,29 @@ def test_history_records_unique_candles_and_scores_outcomes(monkeypatch, tmp_pat
     summary = history_summary()
     assert summary["wins"] == 1
     assert summary["scored_win_rate_pct"] == 100.0
+
+
+def test_postgres_adapter_translates_placeholders_and_conflict_handling():
+    from signal_history import _PostgresConnection
+
+    class FakeConnection:
+        def __init__(self):
+            self.statement = None
+            self.params = None
+
+        def execute(self, statement, params):
+            self.statement = statement
+            self.params = params
+            return "cursor"
+
+    raw = FakeConnection()
+    adapter = _PostgresConnection(raw)
+    result = adapter.execute(
+        "INSERT INTO signal_history (symbol) VALUES (?) "
+        "ON CONFLICT(symbol) DO NOTHING",
+        ("EURUSD_otc",),
+    )
+    assert result == "cursor"
+    assert "VALUES (%s)" in raw.statement
+    assert "ON CONFLICT(symbol) DO NOTHING" in raw.statement
+    assert raw.params == ("EURUSD_otc",)
