@@ -45,14 +45,6 @@ class _PostgresConnection:
         import re
 
         statement = sql.replace("?", "%s")
-        if re.match(r"\\s*INSERT\\s+OR\\s+IGNORE\\s+INTO", statement, re.IGNORECASE):
-            statement = re.sub(
-                r"INSERT\\s+OR\\s+IGNORE\\s+INTO",
-                "INSERT INTO",
-                statement,
-                count=1,
-                flags=re.IGNORECASE,
-            ).rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
         return self._connection.execute(statement, params)
 
 
