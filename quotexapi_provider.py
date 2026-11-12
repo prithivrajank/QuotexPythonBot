@@ -39,27 +39,34 @@ def _get_ssid() -> str:
 
 
 def _symbols() -> list[str]:
-    """Preserve market suffix: plain symbols are live forex, *_otc are OTC."""
+    """Return OTC instruments only; never silently mix standard forex."""
     out=[]
-    for item in os.getenv("FOREX_SYMBOLS","EURUSD_otc,GBPUSD_otc,EURUSD,GBPUSD").split(","):
+    for item in os.getenv("FOREX_SYMBOLS","EURUSD_otc,GBPUSD_otc").split(","):
         s=item.strip().replace("/","").replace("-","").upper()
-        if s.endswith("_OTC"):
-            s=s[:-4]+"_otc"
-        if s and s not in out:
-            out.append(s)
+        if not s:
+            continue
+        if not s.endswith("_OTC"):
+            raise ValueError(
+                "OTC-only mode: every FOREX_SYMBOLS entry must end with _otc."
+            )
+        normalized=s[:-4]+"_otc"
+        if normalized not in out:
+            out.append(normalized)
+    if not out:
+        raise ValueError("OTC-only mode requires at least one *_otc symbol.")
     return out
 
 
 def _account_mode() -> tuple[bool, str]:
-    """One account per Render process; switch using QUOTEX_ACCOUNT and redeploy."""
-    raw=os.getenv("QUOTEX_ACCOUNT", "").strip().lower()
-    if not raw:
-        legacy=os.getenv("QUOTEX_IS_DEMO", "true").strip().lower()
-        raw = "demo" if legacy in {"true","1","yes"} else "real"
-    if raw not in {"demo", "real"}:
-        raise ValueError("QUOTEX_ACCOUNT must be 'demo' or 'real'.")
-    is_demo=raw == "demo"
-    return is_demo, ("Demo" if is_demo else "Real")
+    """This bot is strictly read-only and Demo-account only."""
+    raw=os.getenv("QUOTEX_ACCOUNT", "demo").strip().lower()
+    legacy=os.getenv("QUOTEX_IS_DEMO", "true").strip().lower()
+    if raw not in {"", "demo"} or legacy not in {"true", "1", "yes"}:
+        raise ValueError(
+            "Safety lock: QuotexPythonBot supports Demo account only. "
+            "Set QUOTEX_ACCOUNT=demo and QUOTEX_IS_DEMO=true."
+        )
+    return True, "Demo"
 
 
 def _candle_from_payload(data: Any, symbol: str) -> dict[str, Any] | None:
@@ -232,7 +239,7 @@ def connection_status(start: bool = False) -> dict[str,Any]:
                "Quotex SSID is not configured.")))
         ),
         "source": SOURCE,
-        "market_type": "Quotex OTC + live forex",
+        "market_type": "Quotex OTC only",
         "account_mode": os.getenv("QUOTEX_ACCOUNT", "demo").strip().lower(),
         "events_received": _events,
         "ticks_received": len(_ticks),
