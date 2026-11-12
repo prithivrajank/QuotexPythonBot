@@ -26,12 +26,55 @@ _ADDITIVE_COLUMNS = {
 }
 
 
+def _database_url() -> str | None:
+    value = os.getenv("DATABASE_URL", "").strip()
+    return value or None
+
+
 def _db_path() -> str:
     return os.getenv("DATABASE_PATH", DEFAULT_DB_PATH)
 
 
+class _PostgresConnection:
+    """Small DB-API compatibility shim for the existing SQLite-style queries."""
+
+    def __init__(self, connection: Any):
+        self._connection = connection
+
+    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> Any:
+        import re
+
+        statement = sql.replace("?", "%s")
+        if re.match(r"\\s*INSERT\\s+OR\\s+IGNORE\\s+INTO", statement, re.IGNORECASE):
+            statement = re.sub(
+                r"INSERT\\s+OR\\s+IGNORE\\s+INTO",
+                "INSERT INTO",
+                statement,
+                count=1,
+                flags=re.IGNORECASE,
+            ).rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
+        return self._connection.execute(statement, params)
+
+
 @contextmanager
-def _connection() -> Iterator[sqlite3.Connection]:
+def _connection() -> Iterator[Any]:
+    database_url = _database_url()
+    if database_url:
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ImportError as exc:
+            raise RuntimeError(
+                "DATABASE_URL is configured but psycopg is not installed"
+            ) from exc
+        conn = psycopg.connect(database_url, connect_timeout=10, row_factory=dict_row)
+        try:
+            with conn:
+                yield _PostgresConnection(conn)
+        finally:
+            conn.close()
+        return
+
     conn = sqlite3.connect(_db_path(), timeout=10)
     conn.row_factory = sqlite3.Row
     try:
@@ -42,6 +85,38 @@ def _connection() -> Iterator[sqlite3.Connection]:
 
 
 def init_history() -> None:
+    if _database_url():
+        with _connection() as conn:
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS signal_history (
+                    id BIGSERIAL PRIMARY KEY,
+                    symbol TEXT NOT NULL,
+                    timeframe_seconds INTEGER NOT NULL,
+                    signal_time BIGINT NOT NULL,
+                    signal TEXT NOT NULL,
+                    entry_price DOUBLE PRECISION NOT NULL,
+                    reason TEXT NOT NULL,
+                    rsi_14 DOUBLE PRECISION,
+                    macd_histogram DOUBLE PRECISION,
+                    outcome TEXT NOT NULL DEFAULT 'PENDING',
+                    exit_price DOUBLE PRECISION,
+                    price_change_pct DOUBLE PRECISION,
+                    created_at TEXT NOT NULL,
+                    signal_score INTEGER,
+                    signal_grade TEXT,
+                    ema_9 DOUBLE PRECISION,
+                    ema_21 DOUBLE PRECISION,
+                    strategy_name TEXT,
+                    strategy_version TEXT,
+                    UNIQUE(symbol, timeframe_seconds, signal_time)
+                )"""
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_signal_history_time "
+                "ON signal_history(signal_time DESC)"
+            )
+        return
+
     with _connection() as conn:
         conn.execute(
             """CREATE TABLE IF NOT EXISTS signal_history (
@@ -62,7 +137,6 @@ def init_history() -> None:
             )"""
         )
 
-        # Inspect the current table so this works for both new and old databases.
         existing = {
             row["name"]
             for row in conn.execute("PRAGMA table_info(signal_history)").fetchall()
@@ -103,11 +177,12 @@ def record_signal(
 
     with _connection() as conn:
         cursor = conn.execute(
-            """INSERT OR IGNORE INTO signal_history
+            """INSERT INTO signal_history
                (symbol,timeframe_seconds,signal_time,signal,entry_price,reason,
                 rsi_14,macd_histogram,signal_score,signal_grade,ema_9,ema_21,
                 strategy_name,strategy_version,outcome,created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'PENDING',?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'PENDING',?)
+               ON CONFLICT(symbol, timeframe_seconds, signal_time) DO NOTHING""",
             (
                 symbol,
                 timeframe_seconds,
