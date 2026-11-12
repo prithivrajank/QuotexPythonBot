@@ -103,6 +103,19 @@ def init_history() -> None:
                     UNIQUE(symbol, timeframe_seconds, signal_time)
                 )"""
             )
+            for column, sql_type in {
+                "signal_score": "INTEGER",
+                "signal_grade": "TEXT",
+                "macd_histogram": "DOUBLE PRECISION",
+                "ema_9": "DOUBLE PRECISION",
+                "ema_21": "DOUBLE PRECISION",
+                "rsi_14": "DOUBLE PRECISION",
+                "strategy_name": "TEXT",
+                "strategy_version": "TEXT",
+            }.items():
+                conn.execute(
+                    f"ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS {column} {sql_type}"
+                )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_signal_history_time "
                 "ON signal_history(signal_time DESC)"
