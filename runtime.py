@@ -180,7 +180,7 @@ def refresh_snapshot(symbol: str | None = None) -> dict[str, Any]:
         now_ts = int(datetime.now(timezone.utc).timestamp())
         candle_age_seconds = max(0, now_ts - int(latest["time"]))
         # This labels the timestamp window only; REST polling does not guarantee tick-by-tick updates.
-        candle_status = "LIVE WINDOW (provider-update-dependent)" if candle_age_seconds < TIMEFRAME_SECONDS else "CLOSED / STALE"
+        candle_status = "RECENT (timestamp within timeframe; live ticks not verified)" if candle_age_seconds < TIMEFRAME_SECONDS else "CLOSED / STALE"
         snapshot = {
             "available": True,
             "candle_status": candle_status,
