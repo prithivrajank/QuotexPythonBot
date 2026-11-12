@@ -260,6 +260,8 @@ def get_candles(asset: str,timeframe_seconds: int,limit: int=100) -> list[dict[s
     symbol=asset.strip().replace("/","").replace("-","").upper()
     if symbol.endswith("_OTC"):
         symbol=symbol[:-4]+"_otc"
+    else:
+        raise ValueError("OTC-only mode: requested symbol must end with _otc.")
     if not _connected:
         future = _ensure_connection()
         if future is not None:
@@ -272,6 +274,8 @@ def get_candles(asset: str,timeframe_seconds: int,limit: int=100) -> list[dict[s
     rows=list(_rows.get(symbol,[]))
     if len(rows)<30:
         raise RuntimeError(f"No verified OHLC stream yet for {symbol}; received {len(rows)} candle bars.")
+    if not rows or rows[-1]["time"] < time.time() - 180:
+        raise RuntimeError(f"Latest OTC candle for {symbol} is stale; refusing to publish signals.")
     return rows[-limit:]
 
 
